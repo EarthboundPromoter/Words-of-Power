@@ -3213,7 +3213,7 @@ if _PyGameView is not None:
                 else:
                     if dx * dx + dy * dy > r * r:
                         range_warning = "Out of range. "
-            aoe_info = f"Within AoE: {', '.join(details)}."
+            aoe_info = f"Within AoE {', '.join(details)}."
             return (range_warning, aoe_info)
         except Exception as e:
             log(f"[AoE Check] Error: {e}")
