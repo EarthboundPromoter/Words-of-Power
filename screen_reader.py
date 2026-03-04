@@ -1,4 +1,4 @@
-            # Rift Wizard 2 Screen Reader Mod
+# Rift Wizard 2 Screen Reader Mod
 # Phase 0-2: NVDA Integration + Event Announcements
 
 import sys
@@ -1497,7 +1497,7 @@ def on_item_pickup(event):
     """Announce item pickups. For Memory Orbs, also announce new SP total."""
     try:
         item_name = _name(event.item)
-        desc = getattr(event.item, 'description', '')
+        desc = event.item.get_description() if hasattr(event.item, 'get_description') else getattr(event.item, 'description', '')
         text = f"Picked up {item_name}"
         if desc and desc != "Undescribed Item":
             text += f". {desc}"
