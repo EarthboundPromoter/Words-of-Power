@@ -1,0 +1,30 @@
+# Logs
+logs/
+*.log
+
+# Binary dependencies (users provide their own NVDA DLL)
+*.dll
+
+# Legacy/unused libraries
+accessible_output2/
+platform_utils/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Tests (dev only)
+tests/
+
+# IDE / editor
+.claude/
+.vscode/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Backups
+*.bak
