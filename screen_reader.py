@@ -1,4 +1,4 @@
-# Rift Wizard 2 Screen Reader Mod
+            # Rift Wizard 2 Screen Reader Mod
 # Phase 0-2: NVDA Integration + Event Announcements
 
 import sys
@@ -3131,8 +3131,8 @@ if _PyGameView is not None:
     def _check_aoe_warning(view):
         """Check what units are in the current spell's AoE.
         Returns (range_warning, aoe_info) tuple — both may be empty strings.
-        range_warning ("Out of range. ") goes at the START of speech.
-        aoe_info ("Within AoE. You, 3 enemies.") goes at the END.
+        range_warning ("Out of range. ") goes first.
+        aoe_info ("Within AoE. You, 3 enemies.") goes before tile/target details.
         Reports enemies, allies, and player in blast zone (#17).
         Only warns for true AoE spells (radius > 0, beams, cones) — not single-target spells."""
         try:
@@ -3252,9 +3252,9 @@ if _PyGameView is not None:
                 if current in tab_targets:
                     idx = tab_targets.index(current) + 1
                     text = f"{idx} of {len(tab_targets)}. {text}"
-            # AoE: range warning before target, AoE details after
+            # AoE: range warning first, then AoE details, then target
             range_warn, aoe_info = _check_aoe_warning(self)
-            text = f"{range_warn}{text} {aoe_info}".strip() if (range_warn or aoe_info) else text
+            text = f"{range_warn}{aoe_info} {text}".strip() if (range_warn or aoe_info) else text
             async_tts.speak(text)
             log(f"[Target] {text}")
         except Exception as e:
@@ -3296,7 +3296,7 @@ if _PyGameView is not None:
                 return
             tile_text = _describe_tile_brief(view, point)
             range_warn, aoe_info = _check_aoe_warning(view)
-            text = f"{range_warn}{tile_text} {aoe_info}".strip() if (range_warn or aoe_info) else tile_text
+            text = f"{range_warn}{aoe_info} {tile_text}".strip() if (range_warn or aoe_info) else tile_text
             log(f"[Target Tile] {text}")
             async_tts.speak(text)
         except Exception as e:
