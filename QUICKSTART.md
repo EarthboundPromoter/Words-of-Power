@@ -1,4 +1,4 @@
-# Rift Wizard 2 Screen Reader Mod
+# Words of Power: An Accessibility Mod for Rift Wizard 2
 
 ## Setup
 
@@ -9,9 +9,9 @@
 
 ## Design
 
-The mod hooks into the game's Python source and voices every gameplay-relevant event. The goal is equivalent access — the same information a sighted player gets, delivered through speech. Not simplified, not computed for you. If a sighted player sees a small damage number and infers "resisted," you hear "resisted." If a sighted player has to learn which spells counter which enemies, so do you. The mod provides perception, not analysis.
+The mod hooks into the game's Python source and voices every gameplay-relevant event. The goal is for the mod to disappear — you're not using an accessibility tool, you're just playing Rift Wizard 2. Where a sighted player sees a small damage number and infers "resisted," you hear "resisted." The same information, the same challenge, the same game.
 
-The success criterion: every death should be attributable to your decisions, never to missing information.
+Every death should be attributable to your decisions, never to missing information.
 
 ### Speech Batching
 
