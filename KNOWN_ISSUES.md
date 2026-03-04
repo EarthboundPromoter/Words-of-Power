@@ -12,6 +12,7 @@ The following screens do not have speech output yet:
 ## Untested Features
 
 - **Cooldown ready notification** — The mod announces when a spell comes off cooldown, but no playtest has encountered a cooldown spell yet. This feature exists but is unverified.
+- **Late-game content** — Playtesting has covered levels 1 through 5. Later floors with higher enemy density, more complex encounters, and endgame mechanics have not been tested. Speech output may become too dense or miss edge cases that only appear in deeper runs.
 
 ## Setup Notes
 
