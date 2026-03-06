@@ -17,4 +17,4 @@ The following screens do not have speech output yet:
 ## Setup Notes
 
 - NVDA must be running before you launch the game. If NVDA starts after the game, the mod won't connect.
-- The mod requires `nvdaControllerClient64.dll` in the `mods/screen_reader/` folder. This file ships with NVDA — see QUICKSTART.md for where to find it.
+- The mod requires `nvdaControllerClient64.dll` in the `mods/screen_reader/` folder. This file ships with NVDA — see the Quick Start section in README.md for setup details.

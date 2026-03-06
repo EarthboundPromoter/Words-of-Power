@@ -1,5 +1,5 @@
-# Rift Wizard 2 Screen Reader Mod
-# Phase 0-2: NVDA Integration + Event Announcements
+# Rift Wizard 2 Screen Reader Mod — Words of Power
+MOD_VERSION = "0.1.0"
 
 import sys
 import os
@@ -38,7 +38,7 @@ def log(message):
     log_file.flush()
 
 log("=" * 60)
-log("Screen Reader Mod - NVDA Debug Version")
+log(f"Words of Power v{MOD_VERSION}")
 log(f"Mod directory: {mod_dir}")
 log(f"Game directory: {game_dir}")
 log(f"Log file: {log_file_path}")
@@ -132,7 +132,7 @@ class NVDATTS:
 # Initialize NVDA TTS
 tts = NVDATTS()
 # All DLL calls go through async_tts (SyncTTS wrapper) for consistent history tracking.
-log("Screen reader mod initialization complete")
+log(f"Words of Power v{MOD_VERSION} initialization complete")
 
 # ============================================================================
 # PHASE 0.5: Level Lifecycle Hook
@@ -221,6 +221,8 @@ class SyncTTS:
         self.base_tts.speak(' '.join(chunks))
 
 async_tts = SyncTTS(tts)
+async_tts.speak(f"Words of Power version {MOD_VERSION}")
+log(f"[Init] Spoke version: {MOD_VERSION}")
 
 # ============================================================================
 # SPEECH BATCHING — Priority Queue + Flush System
@@ -961,6 +963,25 @@ def _deploy_get_spawners(level):
     return [(u, u.x, u.y) for u in level.units
             if getattr(u, 'is_lair', False)]
 
+def _number_deploy_dupes(items):
+    """Add ordinal suffix to duplicate names in a deploy cycling list.
+    Items are (entity, x, y, name) tuples. Returns new list with
+    ' 1', ' 2' etc. appended to names that appear more than once."""
+    from collections import Counter
+    base_names = [n for _, _, _, n in items]
+    counts = Counter(base_names)
+    if not any(c > 1 for c in counts.values()):
+        return items
+    seen = {}
+    result = []
+    for entity, x, y, n in items:
+        if counts[n] > 1:
+            seen[n] = seen.get(n, 0) + 1
+            result.append((entity, x, y, f"{n} {seen[n]}"))
+        else:
+            result.append((entity, x, y, n))
+    return result
+
 def _deploy_get_interactions(level):
     """Shops, shrines, circles, NPCs on level. Returns [(prop, x, y, name), ...]."""
     results = []
@@ -1497,7 +1518,7 @@ def on_item_pickup(event):
     """Announce item pickups. For Memory Orbs, also announce new SP total."""
     try:
         item_name = _name(event.item)
-        desc = event.item.get_description() if hasattr(event.item, 'get_description') else getattr(event.item, 'description', '')
+        desc = (event.item.get_description() or '') if hasattr(event.item, 'get_description') else getattr(event.item, 'description', '')
         text = f"Picked up {item_name}"
         if desc and desc != "Undescribed Item":
             text += f". {desc}"
@@ -1735,6 +1756,47 @@ def _on_unit_added_adjacency(evt):
 def _on_death_adjacency(evt):
     adjacency_tracker.on_unit_death(evt)
 
+# Pickle-safe wrapper: Buff-based spawn announcement (boss minions, etc.)
+def _on_unit_added_spawn(evt):
+    """Announce non-spell spawns (buff-based summons like boss minion generation).
+    Spell-based summons are already announced via on_spell_cast; skip those."""
+    try:
+        unit = evt.unit
+        if _level_complete[0]:
+            return
+        game = _game_ref[0]
+        if game is None or game.p1 is None:
+            return
+        # Skip player
+        if unit is game.p1:
+            return
+        # Skip spell-based summons (already announced via on_spell_cast)
+        source = getattr(unit, 'source', None)
+        if source is not None and isinstance(source, Level.Spell):
+            return
+        # Skip Soul Jars (handled by dedicated handler)
+        uname = getattr(unit, 'name', '')
+        if 'Soul Jar' in uname:
+            return
+        # Skip allied summons (player minions) — already covered by spell cast
+        if not Level.are_hostile(unit, game.p1):
+            return
+        # Announce hostile buff-based spawn
+        dx = unit.x - game.p1.x
+        dy = unit.y - game.p1.y
+        offset = _direction_offset(dx, dy)
+        text = f"{uname} spawned, {offset}"
+        log(f"[Spawn] {_log_ctx()} {text} @({unit.x},{unit.y})")
+        batcher.speak_collapsed({
+            'tier': TIER_WORLD,
+            'event_type': 'spawn',
+            'source_name': uname,
+            'spell_name': '',
+            'text': text,
+        })
+    except Exception as e:
+        log(f"[Spawn] Error: {e}")
+
 # Pickle-safe wrapper: Soul Jar creation detection
 def _on_unit_added_souljar(evt):
     """Announce when a Soul Jar unit is summoned (lich mechanic).
@@ -1787,7 +1849,9 @@ def register_triggers(event_manager):
     event_manager.register_global_trigger(Level.EventOnDeath, _on_death_adjacency)
     # Soul Jar creation detection (S59 — Bug #47)
     event_manager.register_global_trigger(Level.EventOnUnitAdded, _on_unit_added_souljar)
-    log("[Screen Reader] Triggers registered: SpellCast, Damaged, Death, Healed, BuffApply, BuffRemove, ItemPickup, LevelComplete, ShieldRemoved, Moved, UnitAdded (adjacency+souljar)")
+    # Buff-based spawn announcement (S65 — boss minions, etc.)
+    event_manager.register_global_trigger(Level.EventOnUnitAdded, _on_unit_added_spawn)
+    log("[Screen Reader] Triggers registered: SpellCast, Damaged, Death, Healed, BuffApply, BuffRemove, ItemPickup, LevelComplete, ShieldRemoved, Moved, UnitAdded (adjacency+souljar+spawn)")
 
 # Update lifecycle hook to register triggers on every level transition
 def patched_setup_logging_v2(self, logdir, level_num):
@@ -2004,6 +2068,9 @@ if _PyGameView is not None:
 
     def patched_choose_spell(self, spell):
         """Announce spell selection with range and specific failure reason."""
+        # During deploy, number keys are hijacked for category cycling — suppress native spell select
+        if getattr(self.game, 'deploying', False):
+            return
         # LookSpell (V key) — not a real spell selection, skip combat announcement
         if type(spell).__name__ == 'LookSpell':
             _original_choose_spell(self, spell)
@@ -2321,9 +2388,9 @@ if _PyGameView is not None:
         import re
         desc = ""
         if hasattr(spell, 'get_description'):
-            desc = spell.get_description()
+            desc = spell.get_description() or ''
         elif hasattr(spell, 'description'):
-            desc = spell.description
+            desc = spell.description or ''
         if desc:
             def _clean_tag(m):
                 content = m.group(1)
@@ -2361,15 +2428,37 @@ if _PyGameView is not None:
     _original_open_shop = _PyGameView.open_shop
 
     def _shop_item_cost(view, target):
-        """Get SP cost info for a shop item: 'Cost 1 SP' or 'Cost 3 SP, cannot afford'."""
+        """Get cost info for a shop item, handling different currency types."""
         game = getattr(view, 'game', None)
         if game is None:
             return ""
         try:
+            # Level shops (SHOP_TYPE_SHOP) use shop-specific currencies
+            if getattr(view, 'shop_type', -1) == getattr(_main, 'SHOP_TYPE_SHOP', 3):
+                shop = getattr(game.cur_level, 'cur_shop', None) if game.cur_level else None
+                if shop:
+                    currency = getattr(shop, 'currency', 0)
+                    if currency == Level.CURRENCY_PICK:
+                        return ""  # Free pick-one shops — no cost to announce
+                    elif currency == Level.CURRENCY_MAX_HP:
+                        item_cost = getattr(target, 'cost', 0)
+                        affordable = shop.can_shop(game.p1, target)
+                        suffix = "" if affordable else ", cannot afford"
+                        return f"Cost {item_cost} max HP{suffix}"
+                    else:
+                        # CURRENCY_GOLD or unknown
+                        item_cost = getattr(target, 'cost', 0)
+                        affordable = shop.can_shop(game.p1, target)
+                        suffix = "" if affordable else ", cannot afford"
+                        return f"Cost {item_cost} gold{suffix}"
+            # SP-based shops (SPELLS, UPGRADES, SPELL_UPGRADES)
             cost = game.get_upgrade_cost(target)
             affordable = game.can_buy_upgrade(target)
             owned = game.has_upgrade(target)
             if owned:
+                # In Learn Spell shop, owned spells open upgrades on confirm
+                if getattr(view, 'shop_type', -1) == _SHOP_TYPE_SPELLS:
+                    return "Owned, enter to view upgrades"
                 return "Owned"
             if not affordable and isinstance(target, Level.Upgrade) and getattr(target, 'prereq', None):
                 if game.spell_is_upgraded(target.prereq):
@@ -2381,16 +2470,29 @@ if _PyGameView is not None:
 
     _last_shop_target = [None]
 
+    def _describe_bestiary_entry(target):
+        """Describe a bestiary monster entry, respecting slain/unslain visibility.
+        Unslain monsters are hidden by the game — we match that behavior."""
+        name = _name(target)
+        if _SteamAdapter and not _SteamAdapter.has_slain(name):
+            return "Unknown monster"
+        # Slain — full Tier 2 unit description (same as D-key detail)
+        return _describe_unit(target)
+
     def patched_shop_selection_adjust(self, inc):
-        """Announce shop item with full description when navigating."""
+        """Announce shop/bestiary item when navigating."""
         _original_shop_sel_adjust(self, inc)
         try:
             target = self._examine_target
             if target is not None and target is not _last_shop_target[0]:
                 _last_shop_target[0] = target
-                cost = _shop_item_cost(self, target)
-                desc = _describe_spell(target)
-                text = f"{cost}. {desc}" if cost else desc
+                if getattr(self, 'shop_type', -1) == _SHOP_TYPE_BESTIARY:
+                    # Bestiary: unit description, no cost
+                    text = _describe_bestiary_entry(target)
+                else:
+                    cost = _shop_item_cost(self, target)
+                    desc = _describe_spell(target)
+                    text = f"{cost}. {desc}" if cost else desc
                 async_tts.speak(text)
                 log(f"[Shop] {text}")
         except Exception as e:
@@ -2404,9 +2506,13 @@ if _PyGameView is not None:
             target = self._examine_target
             page = getattr(self, 'shop_page', 0) + 1
             if target is not None:
-                cost = _shop_item_cost(self, target)
-                desc = _describe_spell(target)
-                text = f"Page {page}. {cost}. {desc}" if cost else f"Page {page}. {desc}"
+                if getattr(self, 'shop_type', -1) == _SHOP_TYPE_BESTIARY:
+                    desc = _describe_bestiary_entry(target)
+                    text = f"Page {page}. {desc}"
+                else:
+                    cost = _shop_item_cost(self, target)
+                    desc = _describe_spell(target)
+                    text = f"Page {page}. {cost}. {desc}" if cost else f"Page {page}. {desc}"
             else:
                 text = f"Page {page}, empty"
             async_tts.speak(text)
@@ -2415,27 +2521,109 @@ if _PyGameView is not None:
             log(f"[Shop] Error: {e}")
 
     def patched_open_shop(self, shop_type, spell=None):
-        """Announce entering the shop with first item and SP balance."""
+        """Announce entering shop/bestiary/upgrade screen with appropriate header."""
         _last_shop_target[0] = None
         _original_open_shop(self, shop_type, spell=spell)
         try:
             target = self._examine_target
-            sp = getattr(getattr(self, 'game', None), 'p1', None)
-            sp_total = getattr(sp, 'xp', 0) if sp else 0
-            if target is not None:
-                cost = _shop_item_cost(self, target)
-                desc = _describe_spell(target)
-                text = f"Shop, {sp_total} SP available. {cost}. {desc}" if cost else f"Shop, {sp_total} SP available. {desc}"
+            game = getattr(self, 'game', None)
+
+            if shop_type == _SHOP_TYPE_BESTIARY:
+                # Bestiary: slain count header + first entry
+                num_slain = _SteamAdapter.get_num_slain() if _SteamAdapter else 0
+                total = len(self.get_shop_options())
+                header = f"Bestiary, {num_slain} of {total} slain"
+                desc = _describe_bestiary_entry(target) if target else None
+                text = f"{header}. {desc}" if desc else header
+
+            elif shop_type == _SHOP_TYPE_SPELL_UPGRADES:
+                # Spell upgrade picker: "Upgrade [SpellName], N SP available"
+                spell_name = _name(getattr(self, 'shop_upgrade_spell', None)) if hasattr(self, 'shop_upgrade_spell') else "Spell"
+                sp_total = getattr(game.p1, 'xp', 0) if game and game.p1 else 0
+                header = f"Upgrade {spell_name}, {sp_total} SP available"
+                if target is not None:
+                    cost = _shop_item_cost(self, target)
+                    desc = _describe_spell(target)
+                    text = f"{header}. {cost}. {desc}" if cost else f"{header}. {desc}"
+                else:
+                    text = header
+
+            elif shop_type == _SHOP_TYPE_SHOP:
+                # Level shop: use the shop prop's name (Amnesia Shrine, Shoe Box, etc.)
+                shop_prop = getattr(game.cur_level, 'cur_shop', None) if game and game.cur_level else None
+                shop_name = getattr(shop_prop, 'name', 'Shop') if shop_prop else 'Shop'
+                shop_desc = getattr(shop_prop, 'description', '') if shop_prop else ''
+                header = shop_name
+                if shop_desc and shop_desc.strip():
+                    header += f". {shop_desc.strip()}"
+                if target is not None:
+                    cost = _shop_item_cost(self, target)
+                    desc = _describe_spell(target)
+                    text = f"{header}. {cost}. {desc}" if cost else f"{header}. {desc}"
+                else:
+                    text = header
+
             else:
-                text = f"Shop, {sp_total} SP available, empty"
+                # SPELLS or UPGRADES: "Learn Spell/Skill, N SP available"
+                sp_total = getattr(game.p1, 'xp', 0) if game and game.p1 else 0
+                if shop_type == _SHOP_TYPE_UPGRADES:
+                    label = "Learn Skill"
+                else:
+                    label = "Learn Spell"
+                header = f"{label}, {sp_total} SP available"
+                if target is not None:
+                    cost = _shop_item_cost(self, target)
+                    desc = _describe_spell(target)
+                    text = f"{header}. {cost}. {desc}" if cost else f"{header}. {desc}"
+                else:
+                    text = f"{header}, empty"
+
             async_tts.speak(text)
             log(f"[Shop] Opened: {text}")
         except Exception as e:
             log(f"[Shop] Error: {e}")
 
+    _original_try_buy = _PyGameView.try_buy_shop_selection
+    _suppress_char_sheet_for_purchase = [False]
+
+    def patched_try_buy_shop_selection(self, prompt=True):
+        """Announce purchase result after buy attempt."""
+        target = self._examine_target
+        target_name = _name(target) if target else None
+
+        # Check if this is an owned spell (will open upgrades, not buy)
+        game = getattr(self, 'game', None)
+        is_owned_spell = (game and target in getattr(game.p1, 'spells', []))
+
+        if not is_owned_spell and target_name:
+            _suppress_char_sheet_for_purchase[0] = True
+
+        _original_try_buy(self, prompt)
+
+        try:
+            _suppress_char_sheet_for_purchase[0] = False
+            if is_owned_spell:
+                # Opened upgrades view — patched_open_shop handles announcement
+                return
+
+            # Check if purchase happened: shop type/state changed or target removed
+            if target_name and self.state != getattr(_main, 'STATE_SHOP', 2):
+                # Shop closed after purchase — speak purchase, then char sheet
+                async_tts.speak(f"Learned {target_name}")
+                log(f"[Shop] Purchased: {target_name}")
+                # Speak char sheet overview after purchase (was suppressed)
+                try:
+                    _speak_char_sheet_overview(self)
+                except Exception:
+                    pass
+        except Exception as e:
+            _suppress_char_sheet_for_purchase[0] = False
+            log(f"[Shop] Buy announce error: {e}")
+
     _PyGameView.shop_selection_adjust = patched_shop_selection_adjust
     _PyGameView.shop_page_adjust = patched_shop_page_adjust
     _PyGameView.open_shop = patched_open_shop
+    _PyGameView.try_buy_shop_selection = patched_try_buy_shop_selection
     log("  Shop navigation hooks installed")
 
     # ---- Shop Filter Hooks ----
@@ -2449,6 +2637,15 @@ if _PyGameView is not None:
     _filter_attrs = getattr(_main, 'filter_attrs', [])
     _SHOP_TYPE_SPELLS = getattr(_main, 'SHOP_TYPE_SPELLS', 0)
     _SHOP_TYPE_UPGRADES = getattr(_main, 'SHOP_TYPE_UPGRADES', 1)
+    _SHOP_TYPE_SPELL_UPGRADES = getattr(_main, 'SHOP_TYPE_SPELL_UPGRADES', 2)
+    _SHOP_TYPE_SHOP = getattr(_main, 'SHOP_TYPE_SHOP', 3)
+    _SHOP_TYPE_BESTIARY = getattr(_main, 'SHOP_TYPE_BESTIARY', 4)
+    _SteamAdapter = getattr(_main, 'SteamAdapter', None)
+    if _SteamAdapter is None:
+        try:
+            import SteamAdapter as _SteamAdapter
+        except ImportError:
+            _SteamAdapter = None
     # Reverse lookups: Tag -> key letter, attr string -> key letter
     _reverse_tag_keys = {v: k for k, v in _tag_keys.items()}
     _reverse_attr_keys = {v: k for k, v in _attr_keys.items()}
@@ -2517,7 +2714,8 @@ if _PyGameView is not None:
             log(f"[Shop Guide] Error: {e}")
 
     def patched_process_shop_input(self):
-        """Intercept Tab key for filter guide readout before normal shop input."""
+        """Intercept Tab key for filter guide readout before normal shop input.
+        Also detect shop exit (state change back to level)."""
         if self.shop_type in (_SHOP_TYPE_SPELLS, _SHOP_TYPE_UPGRADES):
             import pygame
             for evt in self.events:
@@ -2539,7 +2737,7 @@ if _PyGameView is not None:
     def _describe_examine_target(view):
         """Return speech text for the current examine_target in the character sheet."""
         target = view.examine_target
-        if target is None:
+        if target is None or target is False:
             return "Nothing selected"
 
         # "Learn new spell" / "Learn new skill" placeholder items
@@ -2583,7 +2781,7 @@ if _PyGameView is not None:
             slot = _SLOT_NAMES.get(getattr(target, 'slot', -1), "Equipment")
             desc = ''
             try:
-                desc = target.get_description()
+                desc = target.get_description() or ''
             except:
                 desc = getattr(target, 'description', '')
             parts = [f"{slot}: {name}"]
@@ -2604,7 +2802,7 @@ if _PyGameView is not None:
                 # Skill
                 desc = ''
                 try:
-                    desc = target.get_description()
+                    desc = target.get_description() or ''
                 except:
                     desc = getattr(target, 'description', '')
                 parts = [f"Skill: {name}"]
@@ -2645,27 +2843,32 @@ if _PyGameView is not None:
 
     _original_open_char_sheet = _PyGameView.open_char_sheet
 
+    def _speak_char_sheet_overview(view):
+        """Build and speak the character sheet overview text."""
+        parts = ["Character sheet"]
+        items = view.game.p1.items
+        if items:
+            item_strs = []
+            for it in items:
+                qty = getattr(it, 'quantity', 1)
+                n = _name(it)
+                item_strs.append(f"{qty} {n}" if qty > 1 else n)
+            parts.append(f"Items: {', '.join(item_strs)}. Use with Alt plus number key")
+        section = _char_sheet_section_name(view)
+        desc = _describe_examine_target(view)
+        parts.append(f"{section}. {desc}")
+        text = ". ".join(parts[:2]) + ". " + parts[2] if len(parts) > 2 else ". ".join(parts)
+        async_tts.speak(text)
+        log(f"[CharSheet] Open: {text}")
+
     def patched_open_char_sheet(self):
         """Announce character sheet opening with overview."""
         _original_open_char_sheet(self)
+        if _suppress_char_sheet_for_purchase[0]:
+            # Purchase hook will speak in the right order
+            return
         try:
-            parts = ["Character sheet"]
-            # Items summary (consumables — not navigable in char sheet, but player needs to know)
-            items = self.game.p1.items
-            if items:
-                item_strs = []
-                for it in items:
-                    qty = getattr(it, 'quantity', 1)
-                    n = _name(it)
-                    item_strs.append(f"{qty} {n}" if qty > 1 else n)
-                parts.append(f"Items: {', '.join(item_strs)}. Use with Alt plus number key")
-            # Current selection
-            section = _char_sheet_section_name(self)
-            desc = _describe_examine_target(self)
-            parts.append(f"{section}. {desc}")
-            text = ". ".join(parts[:2]) + ". " + parts[2] if len(parts) > 2 else ". ".join(parts)
-            async_tts.speak(text)
-            log(f"[CharSheet] Open: {text}")
+            _speak_char_sheet_overview(self)
         except Exception as e:
             log(f"[CharSheet] Open error: {e}")
 
@@ -2695,9 +2898,16 @@ if _PyGameView is not None:
         except Exception as e:
             log(f"[CharSheet] Section error: {e}")
 
+    _original_process_char_sheet_input = _PyGameView.process_char_sheet_input
+
+    def patched_process_char_sheet_input(self):
+        """Wrapped for state transition detection (centralized hook handles announcement)."""
+        _original_process_char_sheet_input(self)
+
     _PyGameView.open_char_sheet = patched_open_char_sheet
     _PyGameView.adjust_char_sheet_selection = patched_adjust_char_sheet_selection
     _PyGameView.toggle_char_sheet_selection_type = patched_toggle_char_sheet_selection_type
+    _PyGameView.process_char_sheet_input = patched_process_char_sheet_input
     log("  Character sheet hooks installed")
 
     # ---- Target Selection Hooks ----
@@ -2775,9 +2985,13 @@ if _PyGameView is not None:
             if unit:
                 hp = getattr(unit, 'cur_hp', None)
                 max_hp = getattr(unit, 'max_hp', None)
+                parts = [_name(unit)]
                 if hp is not None and max_hp is not None:
-                    return f"{_name(unit)}, {hp} of {max_hp} HP"
-                return _name(unit)
+                    parts.append(f"{hp} of {max_hp} HP")
+                on_death = _get_on_death_text(unit)
+                if on_death:
+                    parts.append(on_death)
+                return ". ".join(parts)
             # Prop
             if tile.prop:
                 return _name(tile.prop)
@@ -3051,9 +3265,33 @@ if _PyGameView is not None:
 
         return ". ".join(parts)
 
+    def _get_on_death_text(unit):
+        """Extract on-death effect descriptions from a unit's buffs.
+        Returns a short string like 'On death: 9 Fire damage to adjacent' or '' if none."""
+        descs = []
+        for buff in getattr(unit, 'buffs', []):
+            triggers = getattr(buff, 'owner_triggers', {})
+            if Level.EventOnDeath not in triggers:
+                continue
+            tooltip = buff.get_tooltip() if hasattr(buff, 'get_tooltip') else None
+            if not tooltip:
+                tooltip = getattr(buff, 'description', None)
+            if not tooltip:
+                continue
+            # Strip leading "On death, " if present — we add our own prefix
+            stripped = tooltip
+            if stripped.lower().startswith("on death, "):
+                stripped = stripped[len("on death, "):]
+            elif stripped.lower().startswith("on reaching 0 hp, "):
+                stripped = stripped[len("on reaching 0 hp, "):]
+            descs.append(stripped)
+        if not descs:
+            return ""
+        return "On death: " + "; ".join(descs)
+
     def _describe_unit_tier1(unit):
         """Streamlined unit description for Look mode and spell targeting (Tier 1).
-        Format: Name → HP → SH → non-zero resists → status effects → ability names.
+        Format: Name → HP → SH → non-zero resists → status effects → ability names → on-death.
         Press D for full detail (Tier 2)."""
         parts = []
 
@@ -3125,6 +3363,11 @@ if _PyGameView is not None:
         if spells:
             spell_names = [_name(s) for s in spells]
             parts.append(", ".join(spell_names))
+
+        # On-death effects (critical tactical info)
+        on_death = _get_on_death_text(unit)
+        if on_death:
+            parts.append(on_death)
 
         return ". ".join(parts)
 
@@ -3453,9 +3696,8 @@ if _PyGameView is not None:
         player = game.p1
         return (Level.Point(player.x, player.y), game.cur_level, None)
 
-    def _query_enemies(view, scan_level=None, ref_point=None, qualifier=None):
-        """Speak enemy count and nearest enemies with distances.
-        During deploy: pass scan_level=next_level and ref_point=deploy_target."""
+    def _query_enemies(view, scan_level=None, ref_point=None, qualifier=None, reverse=False):
+        """Cycle through enemies one per keypress, nearest-first."""
         try:
             game = getattr(view, 'game', None)
             if game is None:
@@ -3468,59 +3710,128 @@ if _PyGameView is not None:
                 return
             if ref_point is None:
                 ref_point = Level.Point(player.x, player.y)
-
-            # Gather all hostile units with distances
-            enemies = []
-            for unit in level.units:
-                if Level.are_hostile(player, unit):
-                    dist = Level.distance(ref_point, Level.Point(unit.x, unit.y), diag=True)
-                    enemies.append((unit, dist))
-
             _qp = f"From {qualifier}. " if qualifier else ""
 
-            if not enemies:
+            rebuilt = _enemy_scanner.needs_rebuild(ref_point)
+            if rebuilt:
+                enemies = []
+                for unit in level.units:
+                    if Level.are_hostile(player, unit):
+                        dist = Level.distance(ref_point, Level.Point(unit.x, unit.y), diag=True)
+                        enemies.append((unit, dist))
+                enemies.sort(key=lambda x: x[1])
+                _enemy_scanner.set_list(enemies, ref_point)
+
+            if not _enemy_scanner.items:
                 text = f"{_qp}No enemies"
                 log(f"[Enemies] {_log_ctx()} {_qp}No enemies")
                 async_tts.speak(text)
                 return
 
-            # Sort by distance
-            enemies.sort(key=lambda x: x[1])
+            result = _enemy_scanner.advance(reverse, rebuilt)
+            if result is None:
+                return
+            idx, total, show_count = result
+            count_str = f"{total} enem{'y' if total == 1 else 'ies'}"
 
-            parts = []
-            parts.append(f"{len(enemies)} enem{'y' if len(enemies) == 1 else 'ies'}")
+            unit, dist = _enemy_scanner.items[idx]
+            _last_scanned_target[0] = unit
+            try:
+                visible = level.can_see(ref_point.x, ref_point.y, unit.x, unit.y)
+            except:
+                visible = True
+            los_tag = "" if visible else ", blocked"
+            dx = unit.x - ref_point.x
+            dy = unit.y - ref_point.y
+            offset = _direction_offset(dx, dy)
+            via_tag = ""
+            if los_tag:
+                via_tag = _via_hint(level, ref_point,
+                                    Level.Point(unit.x, unit.y), player)
+            soul_tag = ", soulbound" if _has_soulbound(unit) else ""
+            mark_tag = ", marked" if _is_marked(unit) else ""
+            entry = f"{_name(unit)}, {offset}{los_tag}{via_tag}{soul_tag}{mark_tag}"
+            position = f"{idx + 1} of {total}"
+            log_entry = f"{_name(unit)} @({unit.x},{unit.y}), {offset}{los_tag}{via_tag}{soul_tag}{mark_tag}"
 
-            # List up to 5 nearest, with name, distance, direction, and LOS status
-            via_count = 0
-            log_parts = [parts[0]]  # Count header for log too
-            for unit, dist in enemies[:5]:
-                try:
-                    visible = level.can_see(ref_point.x, ref_point.y, unit.x, unit.y)
-                except:
-                    visible = True  # Assume visible if check fails
-                los_tag = "" if visible else ", blocked"
-                dx = unit.x - ref_point.x
-                dy = unit.y - ref_point.y
-                offset = _direction_offset(dx, dy)
-                via_tag = ""
-                if los_tag and via_count < _VIA_HINT_CAP:
-                    via_tag = _via_hint(level, ref_point,
-                                        Level.Point(unit.x, unit.y), player)
-                    via_count += 1
-                soul_tag = ", soulbound" if _has_soulbound(unit) else ""
-                parts.append(f"{_name(unit)}, {offset}{los_tag}{via_tag}{soul_tag}")
-                log_parts.append(f"{_name(unit)} @({unit.x},{unit.y}), {offset}{los_tag}{via_tag}{soul_tag}")
+            if show_count:
+                text = f"{_qp}{count_str}. {entry}. {position}"
+                log(f"[Enemies] {_log_ctx()} {_qp}{count_str}. {log_entry}. {position}")
+            else:
+                text = f"{_qp}{entry}. {position}"
+                log(f"[Enemies] {_log_ctx()} {_qp}{log_entry}. {position}")
 
-            # If more than 5, note the rest
-            if len(enemies) > 5:
-                parts.append(f"and {len(enemies) - 5} more")
-                log_parts.append(f"and {len(enemies) - 5} more")
-
-            text = f"{_qp}{'. '.join(parts)}"
-            log(f"[Enemies] {_log_ctx()} {_qp}{'. '.join(log_parts)}")
             async_tts.speak(text)
         except Exception as e:
             log(f"[Enemies] Error: {e}")
+
+    def _query_spawners(view, scan_level=None, ref_point=None, qualifier=None, reverse=False):
+        """Cycle through spawners one per keypress, nearest-first."""
+        try:
+            game = getattr(view, 'game', None)
+            if game is None:
+                return
+            player = game.p1
+            if player is None:
+                return
+            level = scan_level or game.cur_level
+            if level is None:
+                return
+            if ref_point is None:
+                ref_point = Level.Point(player.x, player.y)
+            _qp = f"From {qualifier}. " if qualifier else ""
+
+            rebuilt = _spawner_scanner.needs_rebuild(ref_point)
+            if rebuilt:
+                spawners = []
+                for unit in level.units:
+                    if Level.are_hostile(player, unit) and getattr(unit, 'is_lair', False):
+                        dist = Level.distance(ref_point, Level.Point(unit.x, unit.y), diag=True)
+                        spawners.append((unit, dist))
+                spawners.sort(key=lambda x: x[1])
+                _spawner_scanner.set_list(spawners, ref_point)
+
+            if not _spawner_scanner.items:
+                text = f"{_qp}No spawners"
+                log(f"[Spawners] {_log_ctx()} {_qp}No spawners")
+                async_tts.speak(text)
+                return
+
+            result = _spawner_scanner.advance(reverse, rebuilt)
+            if result is None:
+                return
+            idx, total, show_count = result
+            count_str = f"{total} spawner{'s' if total != 1 else ''}"
+
+            unit, dist = _spawner_scanner.items[idx]
+            _last_scanned_target[0] = unit
+            try:
+                visible = level.can_see(ref_point.x, ref_point.y, unit.x, unit.y)
+            except:
+                visible = True
+            los_tag = "" if visible else ", blocked"
+            dx = unit.x - ref_point.x
+            dy = unit.y - ref_point.y
+            offset = _direction_offset(dx, dy)
+            via_tag = ""
+            if los_tag:
+                via_tag = _via_hint(level, ref_point,
+                                    Level.Point(unit.x, unit.y), player)
+            mark_tag = ", marked" if _is_marked(unit) else ""
+            entry = f"{_name(unit)}, {offset}{los_tag}{via_tag}{mark_tag}"
+            position = f"{idx + 1} of {total}"
+            log_entry = f"{_name(unit)} @({unit.x},{unit.y}), {offset}{los_tag}{via_tag}{mark_tag}"
+
+            if show_count:
+                text = f"{_qp}{count_str}. {entry}. {position}"
+                log(f"[Spawners] {_log_ctx()} {_qp}{count_str}. {log_entry}. {position}")
+            else:
+                text = f"{_qp}{entry}. {position}"
+                log(f"[Spawners] {_log_ctx()} {_qp}{log_entry}. {position}")
+
+            async_tts.speak(text)
+        except Exception as e:
+            log(f"[Spawners] Error: {e}")
 
     # Pickup priority tiers (lower = announced first):
     #   0 = Unique finds: equipment, scrolls, items — rare, build-defining
@@ -3537,8 +3848,9 @@ if _PyGameView is not None:
         cls = type(prop).__name__
         # Landmarks: strategic navigation points
         if hasattr(prop, 'level_gen_params'):
-            locked = ", locked" if getattr(prop, 'locked', False) else ""
-            return ('landmark', 0, f"Rift{locked}")
+            if getattr(prop, 'locked', False):
+                return None
+            return ('landmark', 0, "Rift")
         if cls == 'PlaceOfPower':
             tag = getattr(prop, 'tag', None)
             tag_name = getattr(tag, 'name', '') if tag else ''
@@ -3584,9 +3896,23 @@ if _PyGameView is not None:
             return ('pickup', _PICKUP_STAT, "Heal")
         return None
 
-    def _query_landmarks(view, scan_level=None, ref_point=None, qualifier=None):
-        """Speak pickups and landmarks on the level with distance and direction.
-        Pickups first (sorted by priority tier, then distance), landmarks after."""
+    def _landmark_cat_label(name):
+        """Short category label for count header breakdown."""
+        if name.startswith("Scroll:"): return "scroll"
+        if name.startswith("Equipment:"): return "equipment"
+        if name.startswith("Item:"): return "item"
+        if name == "Memory Orb": return "orb"
+        if name.startswith("Gold"): return "gold"
+        if name == "Spell Recharge": return "recharge"
+        if name.startswith("Ruby Heart"): return "heart"
+        if name == "Heal": return "heal"
+        if name == "Rift": return "rift"
+        if "Circle" in name: return "circle"
+        if "Shrine" in name: return "shrine"
+        return "shop"
+
+    def _query_landmarks(view, scan_level=None, ref_point=None, qualifier=None, reverse=False):
+        """Cycle through landmarks/pickups one per keypress, nearest-first."""
         try:
             game = getattr(view, 'game', None)
             if game is None:
@@ -3601,84 +3927,67 @@ if _PyGameView is not None:
                 ref_point = Level.Point(player.x, player.y)
             _qp = f"From {qualifier}. " if qualifier else ""
 
-            landmarks = []  # (name, dist, offset, tile_x, tile_y)
-            pickups = []    # (priority, dist, name, offset, tile_x, tile_y)
+            rebuilt = _landmark_scanner.needs_rebuild(ref_point)
+            if rebuilt:
+                items = []  # (name, dist, offset, tx, ty)
+                for tile in level.iter_tiles():
+                    prop = tile.prop
+                    if prop is None:
+                        continue
+                    result = _classify_prop(prop)
+                    if result is None:
+                        continue
+                    category, priority, name = result
+                    dx = tile.x - ref_point.x
+                    dy = tile.y - ref_point.y
+                    dist = max(abs(dx), abs(dy))  # Chebyshev
+                    offset = _direction_offset(dx, dy)
+                    items.append((name, dist, offset, tile.x, tile.y))
+                items.sort(key=lambda x: x[1])
+                _landmark_scanner.set_list(items, ref_point)
 
-            for tile in level.iter_tiles():
-                prop = tile.prop
-                if prop is None:
-                    continue
-                result = _classify_prop(prop)
-                if result is None:
-                    continue
-                category, priority, name = result
-                dx = tile.x - ref_point.x
-                dy = tile.y - ref_point.y
-                dist = max(abs(dx), abs(dy))  # Chebyshev
-                offset = _direction_offset(dx, dy)
-                if category == 'landmark':
-                    landmarks.append((name, dist, offset, tile.x, tile.y))
-                else:
-                    pickups.append((priority, dist, name, offset, tile.x, tile.y))
-
-            # Sort pickups by priority tier first, then distance within tier
-            pickups.sort(key=lambda x: (x[0], x[1]))
-            landmarks.sort(key=lambda x: x[1])
-
-            if not landmarks and not pickups:
+            if not _landmark_scanner.items:
                 text = f"{_qp}Nothing found"
                 log(f"[Landmarks] {_log_ctx()} {_qp}Nothing found")
                 async_tts.speak(text)
                 return
 
-            parts = []
-            log_parts = []
-            # Summary counts
-            counts = []
-            if pickups:
-                counts.append(f"{len(pickups)} pickup{'s' if len(pickups) != 1 else ''}")
-            if landmarks:
-                counts.append(f"{len(landmarks)} landmark{'s' if len(landmarks) != 1 else ''}")
-            count_str = ", ".join(counts)
-            parts.append(count_str)
-            log_parts.append(count_str)
+            # Category-aware count header
+            from collections import Counter
+            cat_counts = Counter(_landmark_cat_label(n) for n, *_ in _landmark_scanner.items)
+            cat_parts = [f"{c} {lab}{'s' if c > 1 else ''}" for lab, c in cat_counts.items()]
+            total = len(_landmark_scanner.items)
+            count_str = f"{total} item{'s' if total != 1 else ''}. {', '.join(cat_parts)}"
 
-            # Pickups first (tactically valuable — route planning)
-            via_count = 0
-            for priority, dist, name, offset, tx, ty in pickups[:8]:
-                try:
-                    visible = level.can_see(ref_point.x, ref_point.y, tx, ty)
-                except:
-                    visible = True
-                los_tag = "" if visible else ", blocked"
-                via_tag = ""
-                if los_tag and via_count < _VIA_HINT_CAP:
-                    via_tag = _via_hint(level, ref_point,
-                                        Level.Point(tx, ty), player)
-                    via_count += 1
-                parts.append(f"{name}, {offset}{los_tag}{via_tag}")
-                log_parts.append(f"{name} @({tx},{ty}), {offset}{los_tag}{via_tag}")
-            if len(pickups) > 8:
-                parts.append(f"and {len(pickups) - 8} more pickups")
-                log_parts.append(f"and {len(pickups) - 8} more pickups")
+            result = _landmark_scanner.advance(reverse, rebuilt)
+            if result is None:
+                return
+            idx, total, show_count = result
 
-            # Landmarks after (rifts not needed until level cleared)
-            for name, dist, offset, tx, ty in landmarks:
-                try:
-                    visible = level.can_see(ref_point.x, ref_point.y, tx, ty)
-                except:
-                    visible = True
-                los_tag = "" if visible else ", blocked"
-                via_tag = ""
-                if los_tag and via_count < _VIA_HINT_CAP:
-                    via_tag = _via_hint(level, ref_point,
-                                        Level.Point(tx, ty), player)
-                    via_count += 1
-                parts.append(f"{name}, {offset}{los_tag}{via_tag}")
-                log_parts.append(f"{name} @({tx},{ty}), {offset}{los_tag}{via_tag}")
+            name, dist, offset, tx, ty = _landmark_scanner.items[idx]
+            _last_scanned_target[0] = (name, tx, ty)
+            # Build entry description
+            try:
+                visible = level.can_see(ref_point.x, ref_point.y, tx, ty)
+            except:
+                visible = True
+            los_tag = "" if visible else ", blocked"
+            via_tag = ""
+            if los_tag:
+                via_tag = _via_hint(level, ref_point,
+                                    Level.Point(tx, ty), player)
+            mark_tag = ", marked" if _is_marked((name, tx, ty)) else ""
+            entry = f"{name}, {offset}{los_tag}{via_tag}{mark_tag}"
+            position = f"{idx + 1} of {total}"
+            log_entry = f"{name} @({tx},{ty}), {offset}{los_tag}{via_tag}{mark_tag}"
 
-            text = f"{_qp}{'. '.join(parts)}"
-            log(f"[Landmarks] {_log_ctx()} {_qp}{'. '.join(log_parts)}")
+            if show_count:
+                text = f"{_qp}{count_str}. {entry}. {position}"
+                log(f"[Landmarks] {_log_ctx()} {_qp}{count_str}. {log_entry}. {position}")
+            else:
+                text = f"{_qp}{entry}. {position}"
+                log(f"[Landmarks] {_log_ctx()} {_qp}{log_entry}. {position}")
+
             async_tts.speak(text)
         except Exception as e:
             log(f"[Landmarks] Error: {e}")
@@ -3847,6 +4156,75 @@ if _PyGameView is not None:
                 pass
         return False
 
+    def _query_los_summary(view, scan_level=None, ref_point=None, qualifier=None):
+        """L key: LoS composition gestalt — count by type with directional clustering."""
+        try:
+            game = getattr(view, 'game', None)
+            if game is None:
+                return
+            player = game.p1
+            if player is None:
+                return
+            level = scan_level or game.cur_level
+            if level is None:
+                return
+            if ref_point is None:
+                ref_point = Level.Point(player.x, player.y)
+
+            _qp = f"From {qualifier}. " if qualifier else ""
+
+            # Gather visible hostile units grouped by (name, direction)
+            from collections import Counter
+            visible = []
+            for unit in level.units:
+                if not Level.are_hostile(player, unit):
+                    continue
+                try:
+                    can_see = level.can_see(ref_point.x, ref_point.y, unit.x, unit.y)
+                except:
+                    can_see = False
+                if can_see:
+                    dx = unit.x - ref_point.x
+                    dy = unit.y - ref_point.y
+                    direction = _cardinal_direction(dx, dy)
+                    visible.append((_name(unit), direction, unit))
+
+            if not visible:
+                text = f"{_qp}Nothing in sight"
+                log(f"[LoS] {_log_ctx()} {text}")
+                async_tts.speak(text)
+                return
+
+            total = len(visible)
+            has_marked_visible = any(_is_marked(u) for _, _, u in visible)
+            # Group by (name, direction), preserving order of first appearance
+            groups = {}
+            group_order = []
+            for name, direction, _u in visible:
+                key = (name, direction)
+                if key not in groups:
+                    groups[key] = 0
+                    group_order.append(key)
+                groups[key] += 1
+
+            # Format: "2 Goblins south, Fire Imp east"
+            parts = []
+            for name, direction in group_order:
+                count = groups[(name, direction)]
+                dir_suffix = f" {direction}" if direction else ", here"
+                if count > 1:
+                    parts.append(f"{count} {name}s{dir_suffix}")
+                else:
+                    parts.append(f"{name}{dir_suffix}")
+
+            count_str = f"{total} in sight"
+            mark_note = ". Marked target visible" if has_marked_visible else ""
+            text = f"{_qp}{count_str}. {', '.join(parts)}{mark_note}"
+            log(f"[LoS] {_log_ctx()} {text}")
+            async_tts.speak(text)
+        except Exception as e:
+            log(f"[LoS] Error: {e}")
+
     def _query_threat(view, scan_level=None, ref_point=None, qualifier=None):
         """T key: Threat vocalization.
         No unit highlighted: 'Safe' or 'Threatened, N. Enemy, direction.'
@@ -3963,6 +4341,138 @@ if _PyGameView is not None:
     # Key 1: quadrant overview. Keys 2-5: cycle orbs, pickups, spawners, shops.
 
     _was_deploying = [False]
+
+    # ---- CycleScanner: unified one-per-press cycling infrastructure ----
+
+    class CycleScanner:
+        """State machine for one-per-press nearest-first cycling scans."""
+        def __init__(self, name):
+            self.name = name
+            self._list = []
+            self._idx = 0
+            self._ref = None
+            self._count_spoken = False
+
+        def reset(self):
+            self._list = []
+            self._idx = 0
+            self._ref = None
+
+        def turn_reset(self):
+            self.reset()
+            self._count_spoken = False
+
+        def needs_rebuild(self, ref_point):
+            return (not self._list
+                    or self._ref is None
+                    or self._ref.x != ref_point.x
+                    or self._ref.y != ref_point.y)
+
+        def set_list(self, items, ref_point):
+            self._list = items
+            self._idx = 0
+            self._ref = ref_point
+
+        def advance(self, reverse=False, rebuilt=False):
+            """Advance cycle index. Returns (idx, total, show_count) or None if empty."""
+            total = len(self._list)
+            if total == 0:
+                return None
+            if reverse and not rebuilt:
+                self._idx = (self._idx - 2) % total
+            idx = self._idx % total
+            show_count = (idx == 0 and rebuilt and not self._count_spoken)
+            if show_count:
+                self._count_spoken = True
+            self._idx = idx + 1
+            return idx, total, show_count
+
+        @property
+        def items(self):
+            return self._list
+
+    _enemy_scanner = CycleScanner("enemies")
+    _spawner_scanner = CycleScanner("spawners")
+    _landmark_scanner = CycleScanner("landmarks")
+
+    # ---- Mark/tracking system (Alt+scan key to mark, passive updates) ----
+    # Supports both units and landmarks. One mark at a time.
+    # Unit mark: stores unit object directly.
+    # Landmark mark: stores (name, x, y) tuple.
+
+    _last_scanned_target = [None]   # Most recently announced target (unit or (name, x, y))
+    _marked_target = [None]         # Player-marked target for persistent tracking
+    _mark_tier_immediate = [True]   # Config: True = immediate tier, False = turn-end
+
+    def _mark_target_name(target):
+        """Get display name for a mark target (unit or landmark tuple)."""
+        if isinstance(target, tuple):
+            return target[0]
+        return _name(target)
+
+    def _mark_scanned_target():
+        """Mark the last scanned target. Toggle off if already marked."""
+        target = _last_scanned_target[0]
+        if target is None:
+            async_tts.speak("Nothing to mark")
+            log("[Mark] Nothing to mark")
+            return
+        current = _marked_target[0]
+        # Toggle off: same unit (identity) or same landmark (position)
+        if current is not None and _same_mark(current, target):
+            _marked_target[0] = None
+            async_tts.speak(f"Unmarked {_mark_target_name(target)}")
+            log(f"[Mark] Unmarked {_mark_target_name(target)}")
+        else:
+            _marked_target[0] = target
+            async_tts.speak(f"Marked {_mark_target_name(target)}")
+            log(f"[Mark] Marked {_mark_target_name(target)}")
+
+    def _same_mark(a, b):
+        """Check if two mark targets refer to the same thing."""
+        a_is_landmark = isinstance(a, tuple)
+        b_is_landmark = isinstance(b, tuple)
+        if a_is_landmark != b_is_landmark:
+            return False
+        if a_is_landmark:
+            return a[1] == b[1] and a[2] == b[2]  # same position
+        return a is b  # unit identity
+
+    def _is_marked(target):
+        """Check if a target (unit or landmark tuple) is the current mark."""
+        current = _marked_target[0]
+        if current is None:
+            return False
+        return _same_mark(current, target)
+
+    def _get_mark_update(level, ref_point):
+        """Get status string for the marked target, or None if no mark/gone."""
+        target = _marked_target[0]
+        if target is None:
+            return None
+        if isinstance(target, tuple):
+            # Landmark mark — check if prop still exists at position
+            name, tx, ty = target
+            try:
+                tile = level.tiles[tx][ty]
+            except (IndexError, TypeError):
+                tile = None
+            if tile is None or tile.prop is None:
+                _marked_target[0] = None
+                return f"Marked landmark gone: {name}"
+            dx = tx - ref_point.x
+            dy = ty - ref_point.y
+            direction = _direction_offset(dx, dy)
+            return f"Marked: {name}, {direction}"
+        else:
+            # Unit mark
+            if target not in level.units:
+                _marked_target[0] = None
+                return "Marked unit dead"
+            dx = target.x - ref_point.x
+            dy = target.y - ref_point.y
+            direction = _direction_offset(dx, dy)
+            return f"Marked: {_name(target)}, {direction}"
 
     # Cycling state for deploy category navigation (keys 2-5)
     _deploy_cycle_cat = [None]     # Current category (2-5) or None
@@ -4093,6 +4603,11 @@ if _PyGameView is not None:
             idx = _deploy_cycle_idx[0] % len(items)
             _entity, x, y, ename = items[idx]
 
+            # For spawners, number duplicates based on current sort order
+            if category == 4:
+                display_names = _number_deploy_dupes(items)
+                ename = display_names[idx][3]
+
             # Jump cursor (suppress tile announce — we speak our own format)
             view.deploy_target = Level.Point(x, y)
             _last_examine_xy[0] = None  # Reset dedup
@@ -4105,13 +4620,8 @@ if _PyGameView is not None:
             log(f"[Deploy] Cycle {_DEPLOY_CAT_NAMES.get(category, '?')} [{idx+1}/{len(items)}]: {text}")
             async_tts.speak(text)
 
-            # Advance index (wraps naturally via modulo above)
+            # Advance index (wraps via modulo on next read)
             _deploy_cycle_idx[0] = idx + 1
-            # On wrap, re-sort from new cursor position
-            if _deploy_cycle_idx[0] >= len(items):
-                _deploy_cycle_idx[0] = 0
-                ref_new = view.deploy_target
-                items.sort(key=lambda e: max(abs(e[1] - ref_new.x), abs(e[2] - ref_new.y)))
 
         except Exception as e:
             log(f"[Deploy] Cycle error: {e}")
@@ -4161,6 +4671,34 @@ if _PyGameView is not None:
         async_tts.speak_batched(chunks)
         log(f"[Gameover] {label}: Realm {game.level_num}, {game.total_turns} turns ({len(chunks)} chunks)")
 
+    def _speak_mod_keybinds():
+        """Speak all mod keybind reference. Triggered by Shift+/ (?) in level state."""
+        lines = [
+            "Mod keybind reference.",
+            "F, vitals. HP, shields, status effects.",
+            "E, enemy scan. Press repeatedly to cycle, nearest first. Shift reverses.",
+            "L, line of sight. Enemy count by type and direction.",
+            "N, spawner scan. Press repeatedly to cycle nests. Shift reverses.",
+            "Alt plus E, N, or Q, mark or unmark the last scanned target.",
+            "Q, landmark scan. Cycle nearest first. Shift Q reverses.",
+            "G, charges. Selected spell or all spells.",
+            "T, threat. Adjacent enemy count and positions.",
+            "D, unit detail. Full stats for unit under cursor.",
+            "B, spatial scan. Walkable distances in 8 directions.",
+            "X, hazard scan. Clouds and webs.",
+            "V, look mode. Cursor to examine tiles.",
+            "C, character sheet.",
+            "Left control, cancel speech.",
+            "Z, repeat last speech.",
+            "Left bracket, speech history back. Right bracket, forward.",
+            "Slash, game help. Shift slash, this reference.",
+            "In deploy: 1 overview, 2 orbs, 3 pickups, 4 spawners, 5 shops.",
+            "In shop: Tab for filter guide.",
+        ]
+        text = " ".join(lines)
+        async_tts.speak(text)
+        log(f"[Help] Mod keybind reference spoken")
+
     def patched_process_level_input(self):
         """Intercept mod hotkeys before normal input processing.
         Also detects deploy phase start/abort transitions, turn boundaries,
@@ -4194,13 +4732,58 @@ if _PyGameView is not None:
                 _flush_hp()
                 adjacency_tracker.heartbeat()
                 _flush_cloud_arrivals()
-                if (_turn_count[0] > 1
+                _enemy_scanner.turn_reset()
+                _spawner_scanner.turn_reset()
+                _landmark_scanner.turn_reset()
+
+                # Marked target update — immediate tier: before turn signal
+                if _mark_tier_immediate[0] and _marked_target[0] is not None and _turn_count[0] > 1:
+                    try:
+                        level = self.game.cur_level
+                        player = self.game.p1
+                        ref = Level.Point(player.x, player.y)
+                        update = _get_mark_update(level, ref)
+                        if update:
+                            async_tts.speak(update)
+                            log(f"[Mark] Turn update: {update}")
+                    except Exception:
+                        pass
+
+                if _turn_count[0] == 1:
+                    # Auto-announce enemy/spawner count on level start
+                    try:
+                        level = self.game.cur_level
+                        player = self.game.p1
+                        enemies = [u for u in level.units if Level.are_hostile(player, u)]
+                        spawners = [u for u in enemies if getattr(u, 'is_lair', False)]
+                        parts = [f"{len(enemies)} enem{'y' if len(enemies) == 1 else 'ies'}"]
+                        if spawners:
+                            parts.append(f"{len(spawners)} spawner{'s' if len(spawners) != 1 else ''}")
+                        text = ", ".join(parts)
+                        log(f"[Level Start] {text}")
+                        async_tts.speak(text)
+                    except Exception:
+                        pass
+                elif (_turn_count[0] > 1
                         and not getattr(self, 'path', None)
                         and now - _last_turn_time[0] > 0.5):
                     _last_turn_time[0] = now
                     text = f"Turn {_turn_count[0]}"
                     log(f"[Turn] {text}")
                     async_tts.speak(text)
+
+                # Marked target update — turn-end tier: after turn signal
+                if not _mark_tier_immediate[0] and _marked_target[0] is not None and _turn_count[0] > 1:
+                    try:
+                        level = self.game.cur_level
+                        player = self.game.p1
+                        ref = Level.Point(player.x, player.y)
+                        update = _get_mark_update(level, ref)
+                        if update:
+                            async_tts.speak(update)
+                            log(f"[Mark] Turn update: {update}")
+                    except Exception:
+                        pass
 
         # Deploy start detection
         if deploying and not _was_deploying[0]:
@@ -4212,6 +4795,13 @@ if _PyGameView is not None:
             for evt in self.events:
                 if evt.type != pygame.KEYDOWN:
                     continue
+                # Reset scan cycling on keys that aren't the respective scan key
+                if evt.key != pygame.K_e:
+                    _enemy_scanner.reset()
+                if evt.key != pygame.K_n:
+                    _spawner_scanner.reset()
+                if evt.key != pygame.K_q:
+                    _landmark_scanner.reset()
                 # Deploy-only number keys: overview (1) and category cycling (2-5)
                 if deploying and evt.key == pygame.K_1:
                     _announce_deploy_overview(self)
@@ -4226,16 +4816,37 @@ if _PyGameView is not None:
                 elif evt.key == pygame.K_f:
                     _query_vitals(self)
                 elif evt.key == pygame.K_e:
-                    ref, lvl, qual = _get_scan_reference(self)
-                    _query_enemies(self, scan_level=lvl, ref_point=ref, qualifier=qual)
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_ALT:
+                        _mark_scanned_target()
+                    else:
+                        ref, lvl, qual = _get_scan_reference(self)
+                        rev = bool(mods & pygame.KMOD_SHIFT)
+                        _query_enemies(self, scan_level=lvl, ref_point=ref, qualifier=qual, reverse=rev)
+                elif evt.key == pygame.K_n:
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_ALT:
+                        _mark_scanned_target()
+                    else:
+                        ref, lvl, qual = _get_scan_reference(self)
+                        rev = bool(mods & pygame.KMOD_SHIFT)
+                        _query_spawners(self, scan_level=lvl, ref_point=ref, qualifier=qual, reverse=rev)
                 elif evt.key == pygame.K_g:
                     _query_charges(self)
                 elif evt.key == pygame.K_q:
-                    ref, lvl, qual = _get_scan_reference(self)
-                    _query_landmarks(self, scan_level=lvl, ref_point=ref, qualifier=qual)
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_ALT:
+                        _mark_scanned_target()
+                    else:
+                        ref, lvl, qual = _get_scan_reference(self)
+                        rev = bool(mods & pygame.KMOD_SHIFT)
+                        _query_landmarks(self, scan_level=lvl, ref_point=ref, qualifier=qual, reverse=rev)
                 elif evt.key == pygame.K_x:
                     ref, lvl, qual = _get_scan_reference(self)
                     _query_hazards(self, scan_level=lvl, ref_point=ref, qualifier=qual)
+                elif evt.key == pygame.K_l:
+                    ref, lvl, qual = _get_scan_reference(self)
+                    _query_los_summary(self, scan_level=lvl, ref_point=ref, qualifier=qual)
                 elif evt.key == pygame.K_LCTRL:
                     async_tts.cancel()
                     _cancel_hp_announcement()
@@ -4268,6 +4879,10 @@ if _PyGameView is not None:
                 elif evt.key == pygame.K_b:
                     ref, lvl, qual = _get_scan_reference(self)
                     _query_space(self, scan_level=lvl, ref_point=ref, qualifier=qual)
+                elif evt.key == pygame.K_SLASH and (pygame.key.get_mods() & pygame.KMOD_SHIFT):
+                    _speak_mod_keybinds()
+                    # Consume event so game doesn't also open Help screen
+                    self.events = [e for e in self.events if not (e.type == pygame.KEYDOWN and e.key == pygame.K_SLASH)]
         except Exception as e:
             log(f"[Hotkey] Error: {e}")
 
@@ -4443,6 +5058,207 @@ if _PyGameView is not None:
     log("  Movement feedback hook installed")
 
     # ========================================================================
+    # CENTRALIZED STATE TRANSITION DETECTION
+    # ========================================================================
+    # Tracks self.state every frame via draw_screen hook. On any state change,
+    # announces the new state. Per-state input processor patches (below) handle
+    # richer content voicing; this guarantees no transition is ever silent.
+    # ========================================================================
+
+    # All state constants
+    _STATE_LEVEL = getattr(_main, 'STATE_LEVEL', 0)
+    _STATE_CHAR_SHEET = getattr(_main, 'STATE_CHAR_SHEET', 1)
+    _STATE_SHOP = getattr(_main, 'STATE_SHOP', 2)
+    _STATE_TITLE = getattr(_main, 'STATE_TITLE', 3)
+    _STATE_OPTIONS = getattr(_main, 'STATE_OPTIONS', 4)
+    _STATE_MESSAGE = getattr(_main, 'STATE_MESSAGE', 5)
+    _STATE_CONFIRM = getattr(_main, 'STATE_CONFIRM', 6)
+    _STATE_REMINISCE = getattr(_main, 'STATE_REMINISCE', 7)
+    _STATE_REBIND = getattr(_main, 'STATE_REBIND', 8)
+    _STATE_COMBAT_LOG = getattr(_main, 'STATE_COMBAT_LOG', 9)
+    _STATE_PICK_MODE = getattr(_main, 'STATE_PICK_MODE', 10)
+    _STATE_PICK_TRIAL = getattr(_main, 'STATE_PICK_TRIAL', 11)
+    _STATE_SETUP_CUSTOM = getattr(_main, 'STATE_SETUP_CUSTOM', 12)
+    _STATE_PICK_MUTATOR_PARAMS = getattr(_main, 'STATE_PICK_MUTATOR_PARAMS', 13)
+    _STATE_ENTER_MUTATOR_VALUE = getattr(_main, 'STATE_ENTER_MUTATOR_VALUE', 14)
+
+    # Human-readable state names for announcement
+    _STATE_NAMES = {
+        _STATE_LEVEL: "Level",
+        _STATE_CHAR_SHEET: "Character Sheet",
+        _STATE_SHOP: "Shop",
+        _STATE_TITLE: "Rift Wizard 2",
+        _STATE_OPTIONS: "Options",
+        _STATE_MESSAGE: "Message",
+        _STATE_CONFIRM: "Confirm",
+        _STATE_REMINISCE: "Run Complete",
+        _STATE_REBIND: "Key Rebind",
+        _STATE_COMBAT_LOG: "Combat Log",
+        _STATE_PICK_MODE: "Select Game Mode",
+        _STATE_PICK_TRIAL: "Select Trial",
+        _STATE_SETUP_CUSTOM: "Custom Mutator Setup",
+        _STATE_PICK_MUTATOR_PARAMS: "Mutator Parameters",
+        _STATE_ENTER_MUTATOR_VALUE: "Enter Mutator Value",
+    }
+
+    # States that are NOT YET VOICED — announce "coming soon" on entry
+    # These have no input processor patch, so this is the only speech they get.
+    _UNVOICED_STATES = {
+        _STATE_REBIND,
+        _STATE_SETUP_CUSTOM,
+        _STATE_PICK_MUTATOR_PARAMS,
+        _STATE_ENTER_MUTATOR_VALUE,
+    }
+
+    # States where the per-state input patch already handles a richer entry
+    # announcement. The centralized hook skips these to avoid double-speaking.
+    _SELF_ANNOUNCING_STATES = {
+        _STATE_CONFIRM,
+        _STATE_TITLE,
+        _STATE_PICK_MODE,
+        _STATE_PICK_TRIAL,
+        _STATE_MESSAGE,
+        _STATE_OPTIONS,
+        _STATE_REMINISCE,
+        _STATE_COMBAT_LOG,
+        _STATE_CHAR_SHEET,  # open_char_sheet hook announces
+        _STATE_SHOP,        # open_shop hook announces
+    }
+
+    # KEY_BIND constants for keybind resolution
+    _KB_UP = getattr(_main, 'KEY_BIND_UP', 0)
+    _KB_DOWN = getattr(_main, 'KEY_BIND_DOWN', 1)
+    _KB_LEFT = getattr(_main, 'KEY_BIND_LEFT', 2)
+    _KB_RIGHT = getattr(_main, 'KEY_BIND_RIGHT', 3)
+    _KB_CONFIRM = getattr(_main, 'KEY_BIND_CONFIRM', 9)
+    _KB_ABORT = getattr(_main, 'KEY_BIND_ABORT', 10)
+
+    def _key_name(view, bind_id):
+        """Resolve a KEY_BIND_* to a human-readable key name from current bindings."""
+        import pygame
+        try:
+            keys = view.key_binds.get(bind_id, [])
+            for k in keys:
+                if k is not None:
+                    return pygame.key.name(k)
+        except:
+            pass
+        return "?"
+
+    # Suppression flag — set False to silence keybind announcements once players
+    # are comfortable. Can be wired to a config toggle later.
+    _ANNOUNCE_KEYBINDS = True
+
+    def _get_state_keybinds(view, state):
+        """Return keybind help string for a state, or '' if none/suppressed."""
+        if not _ANNOUNCE_KEYBINDS:
+            return ""
+
+        up = _key_name(view, _KB_UP)
+        down = _key_name(view, _KB_DOWN)
+        left = _key_name(view, _KB_LEFT)
+        right = _key_name(view, _KB_RIGHT)
+        confirm = _key_name(view, _KB_CONFIRM)
+        abort = _key_name(view, _KB_ABORT)
+        nav_ud = f"{up} and {down} to navigate"
+        nav_lr = f"{left} and {right}"
+
+        if state == _STATE_TITLE:
+            return f"{nav_ud}. {confirm} to select"
+
+        if state in (_STATE_PICK_MODE, _STATE_PICK_TRIAL):
+            return f"{nav_ud}. {confirm} to select. {abort} to go back"
+
+        if state == _STATE_OPTIONS:
+            return f"{nav_ud}. {nav_lr} to adjust. {abort} to close"
+
+        if state == _STATE_MESSAGE:
+            # Mod adds [ ] for chunk navigation on batched messages
+            return f"{confirm} to advance. left bracket for previous. {abort} to close"
+
+        if state == _STATE_CONFIRM:
+            return f"{nav_lr} to toggle. {confirm} to accept"
+
+        if state == _STATE_REMINISCE:
+            return f"{nav_lr} to browse slides. {abort} to exit"
+
+        if state == _STATE_COMBAT_LOG:
+            return f"{nav_ud} to scroll. {nav_lr} to change turn. {abort} to close"
+
+        if state == _STATE_CHAR_SHEET:
+            return f"{nav_ud}. {nav_lr} to switch sections. {confirm} to select. {abort} to close"
+
+        if state == _STATE_SHOP:
+            shop_type = getattr(view, 'shop_type', -1)
+            if shop_type == _SHOP_TYPE_BESTIARY:
+                return f"{nav_ud}. {nav_lr} for pages. {abort} to close"
+            elif shop_type == _SHOP_TYPE_SPELLS:
+                # Learn Spell: explain owned-spell upgrade flow
+                return (f"{nav_ud}. {nav_lr} for pages. {confirm} to buy. "
+                        f"{confirm} on owned spell to view upgrades. "
+                        f"{abort} to close. Letter keys to filter. Tab for filter guide")
+            elif shop_type == _SHOP_TYPE_UPGRADES:
+                # Learn Skill
+                return (f"{nav_ud}. {nav_lr} for pages. {confirm} to buy. "
+                        f"{abort} to close. Letter keys to filter. Tab for filter guide")
+            elif shop_type == _SHOP_TYPE_SPELL_UPGRADES:
+                # Spell upgrade picker
+                return f"{nav_ud}. {confirm} to buy upgrade. {abort} to go back"
+            else:
+                # SHOP_TYPE_SHOP (level shops)
+                return f"{nav_ud}. {confirm} to select. {abort} to close"
+
+        # STATE_LEVEL and unvoiced states — no keybinds announced
+        return ""
+
+    _prev_state = [None]
+    _original_draw_screen = _PyGameView.draw_screen
+
+    _pending_keybinds = [None]  # Deferred keybind speech — spoken on next frame
+
+    def _patched_draw_screen(self, color=None):
+        """Centralized state transition detector. Runs every frame.
+        Announces state name for non-self-announcing states, and defers
+        keybind help to next frame so it speaks after all state-entry content."""
+        cur = self.state
+
+        # Speak deferred keybinds from previous frame's transition
+        if _pending_keybinds[0] is not None:
+            kb = _pending_keybinds[0]
+            _pending_keybinds[0] = None
+            async_tts.speak(kb)
+            log(f"[State] Keybinds: {kb}")
+
+        if cur != _prev_state[0]:
+            old_name = _STATE_NAMES.get(_prev_state[0], str(_prev_state[0]))
+            new_name = _STATE_NAMES.get(cur, f"Unknown State {cur}")
+            log(f"[State] Transition: {old_name} → {new_name}")
+
+            keybinds = _get_state_keybinds(self, cur)
+
+            if cur in _UNVOICED_STATES:
+                # NOT YET VOICED — tell the player clearly, no keybinds
+                async_tts.speak(f"{new_name}. Coming soon, not currently accessible")
+                log(f"[State] {new_name}: unvoiced state, announced coming soon")
+            elif cur not in _SELF_ANNOUNCING_STATES:
+                # State has no per-state patch AND is not unvoiced — announce name
+                # Currently this covers STATE_LEVEL only (no keybinds for Level)
+                async_tts.speak(new_name)
+                log(f"[State] Announced: {new_name}")
+            # else: self-announcing states handle their own entry speech
+
+            # Defer keybind help to next frame — after all state-entry hooks finish
+            if keybinds and cur not in _UNVOICED_STATES:
+                _pending_keybinds[0] = keybinds
+
+            _prev_state[0] = cur
+
+        _original_draw_screen(self, color)
+
+    _PyGameView.draw_screen = _patched_draw_screen
+    log("  Centralized state transition detector installed")
+
+    # ========================================================================
     # STATE SCREEN VOICING
     # ========================================================================
     # Voice navigation for non-gameplay state screens: title, options, confirm,
@@ -4450,16 +5266,6 @@ if _PyGameView is not None:
     # Pattern: wrap process_*_input; detect entry (first call) and selection
     # changes (compare before/after original call).
     # ========================================================================
-
-    # Grab constants from main module
-    _STATE_CONFIRM = getattr(_main, 'STATE_CONFIRM', 6)
-    _STATE_TITLE = getattr(_main, 'STATE_TITLE', 3)
-    _STATE_PICK_MODE = getattr(_main, 'STATE_PICK_MODE', 10)
-    _STATE_PICK_TRIAL = getattr(_main, 'STATE_PICK_TRIAL', 11)
-    _STATE_MESSAGE = getattr(_main, 'STATE_MESSAGE', 5)
-    _STATE_OPTIONS = getattr(_main, 'STATE_OPTIONS', 4)
-    _STATE_REMINISCE = getattr(_main, 'STATE_REMINISCE', 7)
-    _STATE_COMBAT_LOG = getattr(_main, 'STATE_COMBAT_LOG', 9)
 
     # ---- STATE_CONFIRM (Yes/No confirmation dialogs) ----
     _orig_process_confirm = _PyGameView.process_confirm_input
@@ -4826,7 +5632,7 @@ if _PyGameView is not None:
     _PyGameView.process_combat_log_input = _patched_process_combat_log
     log("  Combat log voicing installed")
 
-    log("  State screen voicing: all 8 states installed")
+    log("  State screen voicing: 8 states with full navigation + centralized transition detector for all 15")
 
 else:
     log("[WARNING] Could not find PyGameView class - UI hooks not installed")

@@ -1,5 +1,7 @@
 # Words of Power
 
+**Version 0.1.0**
+
 An accessibility mod for Rift Wizard 2 that provides full speech output through NVDA.
 
 ## About Rift Wizard 2
@@ -17,7 +19,7 @@ An accessibility mod for Rift Wizard 2 that provides full speech output through 
 
 1. NVDA must be running before you launch the game.
 2. The mod folder goes in `RiftWizard2/mods/screen_reader/`. It should contain `screen_reader.py` and `nvdaControllerClient64.dll`.
-3. Launch the game normally. You'll hear "Screen reader mod loaded" if it's working.
+3. Launch the game normally. You'll hear "Words of Power version 0.1.0" if it's working.
 4. Debug log writes to `screen_reader_debug.log` in the mod folder.
 
 ## How It Works
@@ -46,18 +48,30 @@ The mod tracks resources so you don't have to count. Spell charges announce at h
 
 ## Keybinds
 
-The game's own controls are unchanged. Press H in-game for its native help screen. Everything below is added by the mod.
+The game's own controls are unchanged. Press H in-game for its native help screen. Press Shift+/ (?) for the full mod keybind reference. Everything below is added by the mod.
 
 ### Scans
 
 | Key | Function |
 |-----|----------|
-| **E** | Enemy scan — count, nearest with distance, direction, LoS status |
-| **Q** | Landmark scan — rifts, shops, shrines, orbs, pickups, equipment |
+| **E** | Enemy scan — press repeatedly to cycle through all enemies, nearest first. Shift+E reverses. |
+| **L** | Line of sight — enemy count by type with direction (gestalt overview) |
+| **N** | Spawner scan — press repeatedly to cycle through spawner/lair units. Shift+N reverses. |
+| **Q** | Landmark scan — press repeatedly to cycle through rifts, shops, shrines, orbs, pickups. Shift+Q reverses. |
 | **B** | Spatial raycast — walkable distance in all 8 directions |
 | **X** | Hazard scan — clouds, storms, fire, webs |
 | **T** | Threat check — adjacent melee danger (safe / pressed / surrounded) |
 | **D** | Unit detail — full abilities, passives, resistances, movement |
+
+### Unit Marking
+
+| Key | Function |
+|-----|----------|
+| **Alt+E** | Mark/unmark the last enemy announced by E scan |
+| **Alt+N** | Mark/unmark the last spawner announced by N scan |
+| **Alt+Q** | Mark/unmark the last landmark announced by Q scan |
+
+Marked targets are tagged in scan output and get a direction update each turn. One mark at a time — marking a new target replaces the previous mark. Marks auto-clear when the unit dies or the landmark is collected.
 
 ### Status
 
@@ -97,7 +111,9 @@ Tag and attribute filters are voiced when toggled.
 
 ## Tips
 
-- **E and Q are your eyes.** Press them constantly — start of turn, after teleporting, after anything changes. Make it reflexive.
+- **L is your glance. E is your focus.** L tells you what's in sight and where. E cycles through detail on each enemy. Use L for quick awareness, E when you need specifics.
+- **N for spawners.** Spawners are threat multipliers. Tracking them separately saves you from scanning past regular enemies to find them.
+- **Alt+E to track a target.** Mark a priority target (spawner, dangerous enemy) and get passive direction updates each turn without having to re-scan.
 - **B after any displacement.** Tells you room shape and corridor exits. Essential for orientation.
 - **[ is your rewind.** Missed something? Step back through the speech buffer.
 - **Deploy mode matters.** Press 1 for the overview, 2-5 to scout specifics. Starting position is a real decision.
@@ -110,6 +126,10 @@ Include: what you were doing, what you heard (or didn't), and the relevant secti
 ## Known Issues
 
 See [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## Credits
 
