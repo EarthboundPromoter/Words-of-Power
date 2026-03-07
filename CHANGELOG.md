@@ -2,7 +2,7 @@
 
 All notable changes to Words of Power are documented here.
 
-## [Unreleased]
+## [0.2.0] - 2026-03-06
 
 ### Q-Key Landmark Cycling + Scanner Unification
 

@@ -1,6 +1,6 @@
 # Words of Power
 
-**Version 0.1.0**
+**Version 0.2.0**
 
 An accessibility mod for Rift Wizard 2 that provides full speech output through NVDA.
 
@@ -19,7 +19,7 @@ An accessibility mod for Rift Wizard 2 that provides full speech output through 
 
 1. NVDA must be running before you launch the game.
 2. The mod folder goes in `RiftWizard2/mods/screen_reader/`. It should contain `screen_reader.py` and `nvdaControllerClient64.dll`.
-3. Launch the game normally. You'll hear "Words of Power version 0.1.0" if it's working.
+3. Launch the game normally. You'll hear "Words of Power version 0.2.0" if it's working.
 4. Debug log writes to `screen_reader_debug.log` in the mod folder.
 
 ## How It Works
