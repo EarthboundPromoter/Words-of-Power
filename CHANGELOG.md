@@ -23,6 +23,11 @@ All notable changes to Words of Power are documented here.
 - **Keybind help deferral** — Keybind announcements on state change now speak after all other state-entry speech, not before.
 - **Char sheet "False" fix** — Character sheet no longer speaks "False" after purchasing a spell. Game sets examine target to boolean False post-purchase; now caught and silenced.
 
+### Post-Release Hotfix (b9d860e)
+
+- **Mark LoS transitions** — Marked targets now report "blocked" or "in sight" on visibility changes. First update reports current LoS status. Steady-state updates show direction only (no noise). No via hints — just raw LoS state.
+- **RCtrl diagonal movement** — Non-numpad players can now move diagonally with RCtrl+arrow. Counterclockwise mapping: RCtrl+Up=NW, RCtrl+Right=NE, RCtrl+Down=SE, RCtrl+Left=SW. Works in movement, spell targeting, and deploy cursor.
+
 ## [0.1.0] - 2026-03-06
 
 First versioned release. Includes all features developed through 68 sessions, plus the spatial navigation overhaul below.
