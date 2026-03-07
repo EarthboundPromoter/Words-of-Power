@@ -4402,6 +4402,7 @@ if _PyGameView is not None:
 
     _last_scanned_target = [None]   # Most recently announced target (unit or (name, x, y))
     _marked_target = [None]         # Player-marked target for persistent tracking
+    _mark_last_visible = [None]     # LoS state: True/False/None (unset). Only speak "blocked" on transition.
     _mark_tier_immediate = [True]   # Config: True = immediate tier, False = turn-end
 
     def _mark_target_name(target):
@@ -4421,10 +4422,12 @@ if _PyGameView is not None:
         # Toggle off: same unit (identity) or same landmark (position)
         if current is not None and _same_mark(current, target):
             _marked_target[0] = None
+            _mark_last_visible[0] = None
             async_tts.speak(f"Unmarked {_mark_target_name(target)}")
             log(f"[Mark] Unmarked {_mark_target_name(target)}")
         else:
             _marked_target[0] = target
+            _mark_last_visible[0] = None  # Force first update to report LoS status
             async_tts.speak(f"Marked {_mark_target_name(target)}")
             log(f"[Mark] Marked {_mark_target_name(target)}")
 
@@ -4446,7 +4449,8 @@ if _PyGameView is not None:
         return _same_mark(current, target)
 
     def _get_mark_update(level, ref_point):
-        """Get status string for the marked target, or None if no mark/gone."""
+        """Get status string for the marked target, or None if no mark/gone.
+        Reports 'blocked' only on first update or when LoS status changes."""
         target = _marked_target[0]
         if target is None:
             return None
@@ -4459,20 +4463,47 @@ if _PyGameView is not None:
                 tile = None
             if tile is None or tile.prop is None:
                 _marked_target[0] = None
+                _mark_last_visible[0] = None
                 return f"Marked landmark gone: {name}"
             dx = tx - ref_point.x
             dy = ty - ref_point.y
             direction = _direction_offset(dx, dy)
-            return f"Marked: {name}, {direction}"
+            # LoS check for landmarks
+            try:
+                visible = level.can_see(ref_point.x, ref_point.y, tx, ty)
+            except Exception:
+                visible = True
+            los_tag = _mark_los_tag(visible)
+            return f"Marked: {name}, {direction}{los_tag}"
         else:
             # Unit mark
             if target not in level.units:
                 _marked_target[0] = None
+                _mark_last_visible[0] = None
                 return "Marked unit dead"
             dx = target.x - ref_point.x
             dy = target.y - ref_point.y
             direction = _direction_offset(dx, dy)
-            return f"Marked: {_name(target)}, {direction}"
+            # LoS check for units
+            try:
+                visible = level.can_see(ref_point.x, ref_point.y, target.x, target.y)
+            except Exception:
+                visible = True
+            los_tag = _mark_los_tag(visible)
+            return f"Marked: {_name(target)}, {direction}{los_tag}"
+
+    def _mark_los_tag(visible):
+        """Return LoS tag for mark update. Only speaks on first check or transition."""
+        prev = _mark_last_visible[0]
+        _mark_last_visible[0] = visible
+        if prev is None:
+            # First update after marking — always report
+            return "" if visible else ", blocked"
+        if visible != prev:
+            # Transition — report the change
+            return ", in sight" if visible else ", blocked"
+        # No change — stay quiet
+        return ""
 
     # Cycling state for deploy category navigation (keys 2-5)
     _deploy_cycle_cat = [None]     # Current category (2-5) or None
@@ -4885,6 +4916,44 @@ if _PyGameView is not None:
                     self.events = [e for e in self.events if not (e.type == pygame.KEYDOWN and e.key == pygame.K_SLASH)]
         except Exception as e:
             log(f"[Hotkey] Error: {e}")
+
+        # ---- RCtrl+Arrow diagonal movement ----
+        # Intercept arrow keys when Right Ctrl is held, convert to diagonal movement.
+        # Must happen before the game sees the arrow event.
+        # Counterclockwise mapping: RCtrl+Up=NW, RCtrl+Right=NE, RCtrl+Down=SE, RCtrl+Left=SW
+        _RCTRL_DIAG_MAP = {
+            pygame.K_UP: Level.Point(-1, -1),     # NW
+            pygame.K_RIGHT: Level.Point(1, -1),   # NE
+            pygame.K_DOWN: Level.Point(1, 1),      # SE
+            pygame.K_LEFT: Level.Point(-1, 1),     # SW
+        }
+        _diag_consumed = []
+        if self.can_execute_inputs():
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_RCTRL]:
+                for evt in self.events:
+                    if evt.type == pygame.KEYDOWN and evt.key in _RCTRL_DIAG_MAP:
+                        movedir = _RCTRL_DIAG_MAP[evt.key]
+                        if self.cur_spell:
+                            new_target = Level.Point(
+                                self.cur_spell_target.x + movedir.x,
+                                self.cur_spell_target.y + movedir.y)
+                            if self.game.cur_level.is_point_in_bounds(new_target):
+                                self.cur_spell_target = new_target
+                                self.try_examine_tile(new_target)
+                        elif deploying and self.deploy_target:
+                            new_point = Level.Point(
+                                self.deploy_target.x + movedir.x,
+                                self.deploy_target.y + movedir.y)
+                            if self.game.next_level.is_point_in_bounds(new_point):
+                                self.deploy_target = new_point
+                                self.try_examine_tile(new_point)
+                        else:
+                            self.try_move(movedir)
+                            self.cur_spell_target = None
+                        _diag_consumed.append(evt)
+                if _diag_consumed:
+                    self.events = [e for e in self.events if e not in _diag_consumed]
 
         # Capture cursor AFTER our hotkeys, BEFORE game's native input (arrows/mouse)
         _pre_native_pos = None
