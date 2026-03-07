@@ -14,7 +14,7 @@ mod_dir = os.path.dirname(os.path.abspath(__file__))
 game_dir = os.path.abspath(os.path.join(mod_dir, '../..'))
 if game_dir not in sys.path:
     sys.path.append(game_dir)
-
+                                
 # Set up logging to file — archive previous log before overwriting
 log_file_path = os.path.join(mod_dir, "screen_reader_debug.log")
 log_archive_dir = os.path.join(mod_dir, "logs")
@@ -4692,9 +4692,9 @@ if _PyGameView is not None:
             _deploy_tile_suppress[0] = True
             view.try_examine_tile(view.deploy_target)
 
-            # Announce: "Name, quadrant"
+            # Announce: "Jumped to: Name, quadrant"
             quadrant = _quadrant_label(x, y)
-            text = f"{ename}, {quadrant}"
+            text = f"Jumped to: {ename}, {quadrant}"
             log(f"[Deploy] Cycle {_DEPLOY_CAT_NAMES.get(category, '?')} [{idx+1}/{len(items)}]: {text}")
             async_tts.speak(text)
 
