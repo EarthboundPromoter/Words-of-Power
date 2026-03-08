@@ -45,6 +45,38 @@ log(f"Log file: {log_file_path}")
 log("=" * 60)
 
 # ============================================================================
+# SETTINGS
+# ============================================================================
+import configparser as _configparser
+
+_settings_path = os.path.join(mod_dir, "settings.ini")
+_settings = _configparser.ConfigParser()
+
+if not os.path.exists(_settings_path):
+    with open(_settings_path, 'w', encoding='utf-8') as _f:
+        _f.write(
+            "# Words of Power settings\n"
+            "# Edit this file to customize mod behavior. Restart the game after changes.\n"
+            "\n"
+            "[words_of_power]\n"
+            "\n"
+            "# Show absolute grid coordinates in scan output and movement announcements.\n"
+            "# Coordinates appear after direction info: \"Wolf, 3 east (12,8)\"\n"
+            "# Default: false\n"
+            "show_coordinates = false\n"
+        )
+    log("[Settings] Created default settings.ini")
+else:
+    _settings.read(_settings_path, encoding='utf-8')
+    log("[Settings] Loaded settings.ini")
+
+class _Cfg:
+    show_coordinates = _settings.getboolean('words_of_power', 'show_coordinates', fallback=False)
+
+cfg = _Cfg()
+log(f"[Settings] show_coordinates = {cfg.show_coordinates}")
+
+# ============================================================================
 # NVDA INTEGRATION
 # ============================================================================
 # DLL exports (verified via PE export table inspection):
@@ -3750,7 +3782,8 @@ if _PyGameView is not None:
                                     Level.Point(unit.x, unit.y), player)
             soul_tag = ", soulbound" if _has_soulbound(unit) else ""
             mark_tag = ", marked" if _is_marked(unit) else ""
-            entry = f"{_name(unit)}, {offset}{los_tag}{via_tag}{soul_tag}{mark_tag}"
+            coord_tag = f" ({unit.x},{unit.y})" if cfg.show_coordinates else ""
+            entry = f"{_name(unit)}, {offset}{los_tag}{via_tag}{soul_tag}{mark_tag}{coord_tag}"
             position = f"{idx + 1} of {total}"
             log_entry = f"{_name(unit)} @({unit.x},{unit.y}), {offset}{los_tag}{via_tag}{soul_tag}{mark_tag}"
 
@@ -3818,7 +3851,8 @@ if _PyGameView is not None:
                 via_tag = _via_hint(level, ref_point,
                                     Level.Point(unit.x, unit.y), player)
             mark_tag = ", marked" if _is_marked(unit) else ""
-            entry = f"{_name(unit)}, {offset}{los_tag}{via_tag}{mark_tag}"
+            coord_tag = f" ({unit.x},{unit.y})" if cfg.show_coordinates else ""
+            entry = f"{_name(unit)}, {offset}{los_tag}{via_tag}{mark_tag}{coord_tag}"
             position = f"{idx + 1} of {total}"
             log_entry = f"{_name(unit)} @({unit.x},{unit.y}), {offset}{los_tag}{via_tag}{mark_tag}"
 
@@ -3977,7 +4011,8 @@ if _PyGameView is not None:
                 via_tag = _via_hint(level, ref_point,
                                     Level.Point(tx, ty), player)
             mark_tag = ", marked" if _is_marked((name, tx, ty)) else ""
-            entry = f"{name}, {offset}{los_tag}{via_tag}{mark_tag}"
+            coord_tag = f" ({tx},{ty})" if cfg.show_coordinates else ""
+            entry = f"{name}, {offset}{los_tag}{via_tag}{mark_tag}{coord_tag}"
             position = f"{idx + 1} of {total}"
             log_entry = f"{name} @({tx},{ty}), {offset}{los_tag}{via_tag}{mark_tag}"
 
@@ -5075,7 +5110,8 @@ if _PyGameView is not None:
                     _last_move_dir[0] = dir_tuple
                     dir_name = _cardinal_direction(movedir.x, movedir.y)
                     if dir_name:
-                        async_tts.speak(dir_name)
+                        coord = f" ({self.game.p1.x},{self.game.p1.y})" if cfg.show_coordinates else ""
+                        async_tts.speak(f"{dir_name}{coord}")
                         log(f"[Move] ({self.game.p1.x},{self.game.p1.y}) {dir_name}")
                 # Passive terrain classification — announce on transition only (S53)
                 try:
