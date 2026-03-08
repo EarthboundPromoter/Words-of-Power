@@ -506,10 +506,16 @@ def _format_target_group(group):
     parts = []
 
     # Header: target name + direction (in-LoS only; out-of-LoS skips direction)
+    coord_tag = ""
+    if cfg.show_coordinates and target_unit is not None:
+        tx = getattr(target_unit, 'x', None)
+        ty = getattr(target_unit, 'y', None)
+        if tx is not None and ty is not None:
+            coord_tag = f" ({tx},{ty})"
     if group['los'] and direction:
-        parts.append(f"{target_name}, {direction}")
+        parts.append(f"{target_name}, {direction}{coord_tag}")
     else:
-        parts.append(target_name)
+        parts.append(f"{target_name}{coord_tag}")
 
     # Source entries (damage collapsed by source×spell×dtype)
     source_entries = []
@@ -1361,7 +1367,8 @@ def on_damaged(event):
             soul_tag = ""
             if _has_soulbound(unit) and getattr(unit, 'cur_hp', 99) <= 1:
                 soul_tag = ", soulbound"
-            text = f"{spell_name}: {_name(unit)}, {dmg} {dtype}{resist_tag}{soul_tag}"
+            coord_tag = f" ({unit.x},{unit.y})" if cfg.show_coordinates else ""
+            text = f"{spell_name}: {_name(unit)}{coord_tag}, {dmg} {dtype}{resist_tag}{soul_tag}"
             log(f"[Damage OUT] {_log_ctx()} {text}")
             batcher.speak_queued(text)
         else:
@@ -1409,13 +1416,14 @@ def on_death(event):
             batcher.speak_immediate(text)
         else:
             name = _name(unit)
+            coord_tag = f" ({unit.x},{unit.y})" if cfg.show_coordinates else ""
             if event.damage_event is None:
                 # No damage caused this death — duration expired (turns_to_death)
                 is_expired = True
-                fallback = f"{name} expired"
+                fallback = f"{name}{coord_tag} expired"
             else:
                 is_expired = False
-                fallback = f"{name} killed"
+                fallback = f"{name}{coord_tag} killed"
             log(f"[Death] {_log_ctx()} {fallback}")
             # Player-caused kills → QUEUED for salience (adjacent to damage output)
             killed_by_player = False
@@ -3556,6 +3564,8 @@ if _PyGameView is not None:
         """Announce full tile contents in Look mode (V key). Main thread only."""
         try:
             text = _describe_tile(view, point)
+            if cfg.show_coordinates:
+                text = f"{text} ({point.x},{point.y})"
             log(f"[Look] ({point.x},{point.y}) {text}")
             async_tts.speak(text)
         except Exception as e:
@@ -3570,6 +3580,8 @@ if _PyGameView is not None:
             if _name(spell).lower() == 'walk':
                 return
             tile_text = _describe_tile_brief(view, point)
+            if cfg.show_coordinates:
+                tile_text = f"{tile_text} ({point.x},{point.y})"
             range_warn, aoe_info = _check_aoe_warning(view)
             text = f"{range_warn}{aoe_info} {tile_text}".strip() if (range_warn or aoe_info) else tile_text
             log(f"[Target Tile] {text}")
@@ -5103,16 +5115,24 @@ if _PyGameView is not None:
         result = _original_try_move(self, movedir)
         try:
             if result and not is_melee:
-                # Actual movement — announce direction only on change
+                # Actual movement — announce direction on change.
+                # With coords enabled: speak every step (coord is new info each step).
+                # Repeated direction + coords: speak coord only (no direction repeat).
                 _last_blocked_dir[0] = None
                 dir_tuple = (movedir.x, movedir.y)
-                if dir_tuple != _last_move_dir[0]:
+                direction_changed = dir_tuple != _last_move_dir[0]
+                if direction_changed:
                     _last_move_dir[0] = dir_tuple
-                    dir_name = _cardinal_direction(movedir.x, movedir.y)
-                    if dir_name:
-                        coord = f" ({self.game.p1.x},{self.game.p1.y})" if cfg.show_coordinates else ""
-                        async_tts.speak(f"{dir_name}{coord}")
-                        log(f"[Move] ({self.game.p1.x},{self.game.p1.y}) {dir_name}")
+                dir_name = _cardinal_direction(movedir.x, movedir.y)
+                if dir_name and (direction_changed or cfg.show_coordinates):
+                    # p1.x/y is not updated synchronously — compute destination from movedir
+                    px, py = self.game.p1.x + movedir.x, self.game.p1.y + movedir.y
+                    if cfg.show_coordinates:
+                        text = f"{dir_name} ({px},{py})" if direction_changed else f"({px},{py})"
+                    else:
+                        text = dir_name
+                    async_tts.speak(text)
+                    log(f"[Move] ({px},{py}) {dir_name}")
                 # Passive terrain classification — announce on transition only (S53)
                 try:
                     tc, axis = _classify_terrain(self.game.cur_level,
