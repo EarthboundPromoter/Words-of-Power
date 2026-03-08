@@ -15,10 +15,16 @@ An accessibility mod for Rift Wizard 2 that provides full speech output through 
 - [Rift Wizard 2](https://store.steampowered.com/app/2058570/Rift_Wizard_2/) (Steam, Windows)
 - [NVDA](https://www.nvaccess.org/) screen reader
 
+## Download
+
+**[Download the latest release →](https://github.com/EarthboundPromoter/Words-of-Power/releases/latest)**
+
+Click the link above, then download the `.zip` file listed under Assets.
+
 ## Quick Start
 
 1. NVDA must be running before you launch the game.
-2. The mod folder goes in `RiftWizard2/mods/screen_reader/`. It should contain `screen_reader.py` and `nvdaControllerClient64.dll`.
+2. Extract the downloaded zip. Copy the `screen_reader` folder into `RiftWizard2/mods/` so the path looks like `RiftWizard2/mods/screen_reader/screen_reader.py`. (Create the `mods` folder if it doesn't exist.)
 3. Launch the game normally. You'll hear "Words of Power version 0.2.0" if it's working.
 4. Debug log writes to `screen_reader_debug.log` in the mod folder.
 

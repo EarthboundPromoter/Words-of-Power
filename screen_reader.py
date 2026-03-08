@@ -4930,7 +4930,10 @@ if _PyGameView is not None:
         _diag_consumed = []
         if self.can_execute_inputs():
             keys = pygame.key.get_pressed()
-            if keys[pygame.K_RCTRL]:
+            # Also accept LCtrl+Alt (AltGr on European/Spanish keyboards sends LCtrl+RAlt)
+            _diag_trigger = keys[pygame.K_RCTRL] or (
+                keys[pygame.K_LCTRL] and (keys[pygame.K_LALT] or keys[pygame.K_RALT]))
+            if _diag_trigger:
                 for evt in self.events:
                     if evt.type == pygame.KEYDOWN and evt.key in _RCTRL_DIAG_MAP:
                         movedir = _RCTRL_DIAG_MAP[evt.key]

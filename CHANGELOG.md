@@ -28,6 +28,11 @@ All notable changes to Words of Power are documented here.
 - **Mark LoS transitions** — Marked targets now report "blocked" or "in sight" on visibility changes. First update reports current LoS status. Steady-state updates show direction only (no noise). No via hints — just raw LoS state.
 - **RCtrl diagonal movement** — Non-numpad players can now move diagonally with RCtrl+arrow. Counterclockwise mapping: RCtrl+Up=NW, RCtrl+Right=NE, RCtrl+Down=SE, RCtrl+Left=SW. Works in movement, spell targeting, and deploy cursor.
 
+### Post-Release Hotfix 2
+
+- **European keyboard diagonal fix** — Diagonal movement now also triggers on LCtrl+Alt+arrow. On Spanish and other European laptop keyboards, AltGr sends a synthetic LCtrl+RAlt combination; RCtrl alone was never fired. Both LCtrl+LAlt and LCtrl+RAlt are now accepted alongside RCtrl.
+- **README download link** — Added a prominent Download section with a direct link to the latest release and explicit extraction/install instructions. Addresses install friction reported by multiple testers.
+
 ## [0.1.0] - 2026-03-06
 
 First versioned release. Includes all features developed through 68 sessions, plus the spatial navigation overhaul below.
