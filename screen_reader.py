@@ -3625,6 +3625,9 @@ if _PyGameView is not None:
                 valid = level.can_stand(x, y, view.game.p1)
                 text = "clear" if valid else "blocked"
 
+            if cfg.show_coordinates:
+                text = f"{text} ({x},{y})"
+
             log(f"[Deploy] {text}")
             async_tts.speak(text)
         except Exception as e:
@@ -4694,7 +4697,8 @@ if _PyGameView is not None:
 
             # Announce: "Name, quadrant"
             quadrant = _quadrant_label(x, y)
-            text = f"{ename}, {quadrant}"
+            coord_tag = f" ({x},{y})" if cfg.show_coordinates else ""
+            text = f"{ename}, {quadrant}{coord_tag}"
             log(f"[Deploy] Cycle {_DEPLOY_CAT_NAMES.get(category, '?')} [{idx+1}/{len(items)}]: {text}")
             async_tts.speak(text)
 
