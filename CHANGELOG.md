@@ -33,6 +33,11 @@ All notable changes to Words of Power are documented here.
 - **European keyboard diagonal fix** — Diagonal movement now also triggers on LCtrl+Alt+arrow. On Spanish and other European laptop keyboards, AltGr sends a synthetic LCtrl+RAlt combination; RCtrl alone was never fired. Both LCtrl+LAlt and LCtrl+RAlt are now accepted alongside RCtrl.
 - **README download link** — Added a prominent Download section with a direct link to the latest release and explicit extraction/install instructions. Addresses install friction reported by multiple testers.
 
+### Post-Release Hotfix 3
+
+- **Coordinate toggle** — New `settings.ini` configuration file with a `show_coordinates` option (default: false). When enabled, absolute grid coordinates are appended to movement, enemy/spawner/landmark scans, combat output (damage dealt, deaths, collapsed tier), look mode, spell targeting, and deploy cursor. The settings file is created automatically on first run and survives mod updates. Requested by community tester.
+- **Deploy coordinate display** — Coordinate toggle now also covers deploy mode: tile announcements on cursor movement and cycle-jump announcements (keys 2–5) both include coordinates when enabled.
+
 ## [0.1.0] - 2026-03-06
 
 First versioned release. Includes all features developed through 68 sessions, plus the spatial navigation overhaul below.
