@@ -4695,10 +4695,10 @@ if _PyGameView is not None:
             _deploy_tile_suppress[0] = True
             view.try_examine_tile(view.deploy_target)
 
-            # Announce: "Name, quadrant"
+            # Announce: "Jumped to: Name, quadrant"
             quadrant = _quadrant_label(x, y)
             coord_tag = f" ({x},{y})" if cfg.show_coordinates else ""
-            text = f"{ename}, {quadrant}{coord_tag}"
+            text = f"Jumped to: {ename}, {quadrant}{coord_tag}"
             log(f"[Deploy] Cycle {_DEPLOY_CAT_NAMES.get(category, '?')} [{idx+1}/{len(items)}]: {text}")
             async_tts.speak(text)
 
