@@ -4225,41 +4225,133 @@ if _PyGameView is not None:
         except Exception as e:
             log(f"[Charges] Error: {e}")
 
-    def _query_unit_detail(view):
-        """D key: Speak full Tier 2 detail of the unit at cursor position.
-        Includes all abilities with damage/range/descriptions, passives, movement traits, etc."""
+    def _describe_cloud_detail(cloud):
+        """Full detail description of a cloud object."""
+        parts = [_name(cloud, "Cloud")]
+        desc = ''
         try:
-            unit = None
+            desc = cloud.get_description() or ''
+        except:
+            desc = getattr(cloud, 'description', '') or ''
+        if desc:
+            parts.append(_clean_desc(desc))
+        else:
+            dur = getattr(cloud, 'duration', 0)
+            if dur and dur > 0:
+                parts.append(f"{dur} turns remaining")
+        return ". ".join(parts)
+
+    def _describe_prop_detail(prop, view):
+        """Full detail description of a prop (shop, shrine, pickup, etc.)."""
+        # Portal — use existing portal describer
+        if hasattr(prop, 'level_gen_params'):
+            return _describe_portal(prop, view)
+        # Shop/Shrine — name, description, item list
+        if hasattr(prop, 'items') and hasattr(prop, 'name'):
+            parts = [_name(prop)]
+            desc = getattr(prop, 'description', '') or ''
+            if desc:
+                parts.append(_clean_desc(desc))
+            items = getattr(prop, 'items', [])
+            if items:
+                item_names = [_name(item) for item in items]
+                parts.append("Items: " + ", ".join(item_names))
+            return ". ".join(parts)
+        # EquipPickup — describe the equipment inside
+        if hasattr(prop, 'item') and isinstance(prop, Level.Prop):
+            item = prop.item
+            parts = [_name(item)]
+            if isinstance(item, Level.Equipment):
+                slot = _SLOT_NAMES.get(getattr(item, 'slot', -1), "Equipment")
+                parts[0] = f"{slot}: {_name(item)}"
+                bonus_lines = _format_bonus_lines(item)
+                if bonus_lines:
+                    parts.append(". ".join(bonus_lines))
+            desc = ''
+            try:
+                desc = item.get_description() or ''
+            except:
+                desc = getattr(item, 'description', '') or ''
+            if desc:
+                parts.append(_clean_desc(desc))
+            return ". ".join(parts)
+        # SpellScroll — describe the spell
+        if hasattr(prop, 'spell'):
+            return _describe_spell(prop.spell)
+        # Generic prop (ManaDot, HealDot, HeartDot, ChargeDot, GoldDot, PlaceOfPower, etc.)
+        parts = [_name(prop)]
+        desc = ''
+        try:
+            desc = prop.get_description() or ''
+        except:
+            desc = getattr(prop, 'description', '') or ''
+        if desc:
+            parts.append(_clean_desc(desc))
+        return ". ".join(parts)
+
+    def _query_detail(view):
+        """D key: Speak full detail of whatever is under the cursor.
+        Works in all modes: normal, spell targeting, look mode, deploy."""
+        try:
             game = view.game
             if game is None:
                 return
 
-            # Check examine_target first (set by Tab cycling and cursor movement)
-            examine = getattr(view, 'examine_target', None)
-            if examine is None:
-                examine = getattr(view, '_examine_target', None)
-            if examine and hasattr(examine, 'cur_hp') and not _is_player(examine):
-                unit = examine
+            # Determine cursor point and level
+            deploying = getattr(game, 'deploying', False)
+            point = None
+            level = None
 
-            # Fallback: check tile at cursor position
-            if unit is None:
+            if deploying:
+                point = getattr(view, 'deploy_target', None)
+                level = game.next_level
+            else:
+                # Spell targeting or look mode
                 point = getattr(view, 'cur_spell_target', None)
-                if point is None:
-                    point = getattr(view, 'deploy_target', None)
-                if point is not None:
-                    level = view.game.next_level if getattr(game, 'deploying', False) else game.cur_level
-                    if level:
-                        tile_unit = level.get_unit_at(point.x, point.y)
-                        if tile_unit and not _is_player(tile_unit):
-                            unit = tile_unit
+                level = game.cur_level
 
-            if unit is None:
-                async_tts.speak("No unit to examine")
-                log("[Detail] No unit at cursor")
+            # Fallback: player position
+            if point is None and game.p1:
+                point = Level.Point(game.p1.x, game.p1.y)
+                level = game.cur_level
+
+            if point is None or level is None:
+                async_tts.speak("Nothing to examine")
+                log("[Detail] No cursor position")
                 return
 
-            text = _describe_unit(unit)
-            log(f"[Detail] {text}")
+            if not level.is_point_in_bounds(point):
+                async_tts.speak("Out of bounds")
+                return
+
+            tile = level.tiles[point.x][point.y]
+            parts = []
+
+            # Unit on tile (including player)
+            if tile.unit:
+                if _is_player(tile.unit):
+                    parts.append(_describe_unit(tile.unit))
+                else:
+                    parts.append(_describe_unit(tile.unit))
+
+            # Prop on tile
+            if tile.prop:
+                parts.append(_describe_prop_detail(tile.prop, view))
+
+            # Cloud on tile
+            if tile.cloud:
+                parts.append(_describe_cloud_detail(tile.cloud))
+
+            # Terrain (only if nothing else, or wall/chasm always)
+            if tile.is_wall():
+                parts.append("Wall")
+            elif tile.is_chasm:
+                parts.append("Chasm")
+            elif not parts:
+                parts.append("Floor")
+
+            text = ". ".join(parts)
+            log(f"[Detail] ({point.x},{point.y}) {text}")
             async_tts.speak(text)
         except Exception as e:
             log(f"[Detail] Error: {e}")
@@ -4842,7 +4934,7 @@ if _PyGameView is not None:
             "Q, landmark scan. Cycle nearest first. Shift Q reverses.",
             "G, charges. Selected spell or all spells.",
             "T, threat. Adjacent enemy count and positions.",
-            "D, unit detail. Full stats for unit under cursor.",
+            "D, detail. Full description of whatever is under the cursor.",
             "B, spatial scan. Walkable distances in 8 directions.",
             "X, hazard scan. Clouds and webs.",
             "V, look mode. Cursor to examine tiles.",
@@ -5050,7 +5142,7 @@ if _PyGameView is not None:
                     pos = idx + 1 if idx >= 0 else len(async_tts._history)
                     log(f"[History] Forward ({pos}/{len(async_tts._history)})")
                 elif evt.key == pygame.K_d:
-                    _query_unit_detail(self)
+                    _query_detail(self)
                 elif evt.key == pygame.K_t:
                     ref, lvl, qual = _get_scan_reference(self)
                     _query_threat(self, scan_level=lvl, ref_point=ref, qualifier=qual)
