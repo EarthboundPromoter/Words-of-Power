@@ -4787,8 +4787,8 @@ if _PyGameView is not None:
             for q, count in orb_counts.items():
                 quads[q]["props"].append(f"{count} orb{'s' if count > 1 else ''}")
 
-            # Build speech string: "Deploy, level N. Quadrant: details. ..."
-            parts = [f"Deploy, level {level_num}"]
+            # Build speech chunks — one per category for [/] buffer navigation
+            chunks = [f"Deploy, level {level_num}"]
             for q in ("northeast", "southeast", "southwest", "northwest"):
                 data = quads[q]
                 if data["enemies"] == 0 and data["spawners"] == 0 and not data["props"]:
@@ -4799,11 +4799,10 @@ if _PyGameView is not None:
                 if data["spawners"]:
                     q_parts.append(f"{data['spawners']} spawner{'s' if data['spawners'] > 1 else ''}")
                 q_parts.extend(data["props"])
-                parts.append(f"{q.capitalize()}: {', '.join(q_parts)}")
+                chunks.append(f"{q.capitalize()}: {', '.join(q_parts)}")
 
-            text = ". ".join(parts)
-            log(f"[Deploy] Overview: {text}")
-            async_tts.speak(text)
+            log(f"[Deploy] Overview: {'. '.join(chunks)}")
+            async_tts.speak_batched(chunks)
         except Exception as e:
             log(f"[Deploy] Overview error: {e}")
 
