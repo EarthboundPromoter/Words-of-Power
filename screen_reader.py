@@ -3725,6 +3725,38 @@ if _PyGameView is not None:
         except Exception as e:
             log(f"[Vitals] Error: {e}")
 
+    def _query_ally_overview(view):
+        """Shift+F: Buffered list of all allies with HP."""
+        try:
+            game = getattr(view, 'game', None)
+            if game is None:
+                return
+            player = game.p1
+            if player is None:
+                return
+            level = game.cur_level
+            if level is None:
+                return
+            allies = []
+            for unit in level.units:
+                if getattr(unit, 'team', None) == Level.TEAM_PLAYER and not _is_player(unit):
+                    allies.append(unit)
+            if not allies:
+                async_tts.speak("No allies")
+                log("[Allies] No allies")
+                return
+            ref = Level.Point(player.x, player.y)
+            allies.sort(key=lambda u: Level.distance(ref, Level.Point(u.x, u.y), diag=True))
+            chunks = [f"{len(allies)} all{'y' if len(allies) == 1 else 'ies'}"]
+            for unit in allies:
+                hp = getattr(unit, 'cur_hp', 0)
+                max_hp = getattr(unit, 'max_hp', 0)
+                chunks.append(f"{_name(unit)}, {hp} of {max_hp}")
+            log(f"[Allies] Overview: {'. '.join(chunks)}")
+            async_tts.speak_batched(chunks)
+        except Exception as e:
+            log(f"[Allies] Overview error: {e}")
+
     def _get_scan_reference(view):
         """Return (ref_point, scan_level, qualifier) for the current game state.
         qualifier is None (normal/deploy), "destination" (teleport),
@@ -4924,7 +4956,7 @@ if _PyGameView is not None:
         """Speak all mod keybind reference. Triggered by Shift+/ (?) in level state."""
         lines = [
             "Mod keybind reference.",
-            "F, vitals. HP, shields, status effects.",
+            "F, vitals. HP, shields, status effects. Shift F, ally overview.",
             "E, enemy scan. Press repeatedly to cycle, nearest first. Shift reverses.",
             "L, line of sight. Enemy count by type and direction.",
             "N, spawner scan. Press repeatedly to cycle nests. Shift reverses.",
@@ -5075,7 +5107,11 @@ if _PyGameView is not None:
                 elif deploying and evt.key == pygame.K_5:
                     _deploy_cycle(self, 5)
                 elif evt.key == pygame.K_f:
-                    _query_vitals(self)
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_SHIFT:
+                        _query_ally_overview(self)
+                    else:
+                        _query_vitals(self)
                 elif evt.key == pygame.K_e:
                     mods = pygame.key.get_mods()
                     if mods & pygame.KMOD_ALT:
