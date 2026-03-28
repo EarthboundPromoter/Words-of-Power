@@ -61,6 +61,7 @@ The game's own controls are unchanged. Press H in-game for its native help scree
 | Key | Function |
 |-----|----------|
 | **E** | Enemy scan — press repeatedly to cycle through all enemies, nearest first. Shift+E reverses. |
+| **Y** | Ally scan — press repeatedly to cycle through allied units, nearest first. Shift+Y reverses. |
 | **L** | Line of sight — enemy count by type with direction (gestalt overview) |
 | **N** | Spawner scan — press repeatedly to cycle through spawner/lair units. Shift+N reverses. |
 | **Q** | Landmark scan — press repeatedly to cycle through rifts, shops, shrines, orbs, pickups. Shift+Q reverses. |
@@ -74,6 +75,7 @@ The game's own controls are unchanged. Press H in-game for its native help scree
 | Key | Function |
 |-----|----------|
 | **Alt+E** | Mark/unmark the last enemy announced by E scan |
+| **Alt+Y** | Mark/unmark the last ally announced by Y scan |
 | **Alt+N** | Mark/unmark the last spawner announced by N scan |
 | **Alt+Q** | Mark/unmark the last landmark announced by Q scan |
 

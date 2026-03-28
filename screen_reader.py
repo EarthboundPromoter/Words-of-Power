@@ -14,7 +14,7 @@ mod_dir = os.path.dirname(os.path.abspath(__file__))
 game_dir = os.path.abspath(os.path.join(mod_dir, '../..'))
 if game_dir not in sys.path:
     sys.path.append(game_dir)
-
+                                
 # Set up logging to file — archive previous log before overwriting
 log_file_path = os.path.join(mod_dir, "screen_reader_debug.log")
 log_archive_dir = os.path.join(mod_dir, "logs")
@@ -3813,6 +3813,75 @@ if _PyGameView is not None:
         except Exception as e:
             log(f"[Enemies] Error: {e}")
 
+    def _query_allies(view, scan_level=None, ref_point=None, qualifier=None, reverse=False):
+        """Cycle through allied units one per keypress, nearest-first."""
+        try:
+            game = getattr(view, 'game', None)
+            if game is None:
+                return
+            player = game.p1
+            if player is None:
+                return
+            level = scan_level or game.cur_level
+            if level is None:
+                return
+            if ref_point is None:
+                ref_point = Level.Point(player.x, player.y)
+            _qp = f"From {qualifier}. " if qualifier else ""
+
+            rebuilt = _ally_scanner.needs_rebuild(ref_point)
+            if rebuilt:
+                allies = []
+                for unit in level.units:
+                    if getattr(unit, 'team', None) == Level.TEAM_PLAYER and not _is_player(unit):
+                        dist = Level.distance(ref_point, Level.Point(unit.x, unit.y), diag=True)
+                        allies.append((unit, dist))
+                allies.sort(key=lambda x: x[1])
+                _ally_scanner.set_list(allies, ref_point)
+
+            if not _ally_scanner.items:
+                text = f"{_qp}No allies"
+                log(f"[Allies] {_log_ctx()} {_qp}No allies")
+                async_tts.speak(text)
+                return
+
+            result = _ally_scanner.advance(reverse, rebuilt)
+            if result is None:
+                return
+            idx, total, show_count = result
+            count_str = f"{total} all{'y' if total == 1 else 'ies'}"
+
+            unit, dist = _ally_scanner.items[idx]
+            _last_scanned_target[0] = unit
+            try:
+                visible = level.can_see(ref_point.x, ref_point.y, unit.x, unit.y)
+            except:
+                visible = True
+            los_tag = "" if visible else ", blocked"
+            dx = unit.x - ref_point.x
+            dy = unit.y - ref_point.y
+            offset = _direction_offset(dx, dy)
+            via_tag = ""
+            if los_tag:
+                via_tag = _via_hint(level, ref_point,
+                                    Level.Point(unit.x, unit.y), player)
+            mark_tag = ", marked" if _is_marked(unit) else ""
+            coord_tag = f" ({unit.x},{unit.y})" if cfg.show_coordinates else ""
+            entry = f"{_name(unit)}, {offset}{los_tag}{via_tag}{mark_tag}{coord_tag}"
+            position = f"{idx + 1} of {total}"
+            log_entry = f"{_name(unit)} @({unit.x},{unit.y}), {offset}{los_tag}{via_tag}{mark_tag}"
+
+            if show_count:
+                text = f"{_qp}{count_str}. {entry}. {position}"
+                log(f"[Allies] {_log_ctx()} {_qp}{count_str}. {log_entry}. {position}")
+            else:
+                text = f"{_qp}{entry}. {position}"
+                log(f"[Allies] {_log_ctx()} {_qp}{log_entry}. {position}")
+
+            async_tts.speak(text)
+        except Exception as e:
+            log(f"[Allies] Error: {e}")
+
     def _query_spawners(view, scan_level=None, ref_point=None, qualifier=None, reverse=False):
         """Cycle through spawners one per keypress, nearest-first."""
         try:
@@ -4444,6 +4513,7 @@ if _PyGameView is not None:
     _enemy_scanner = CycleScanner("enemies")
     _spawner_scanner = CycleScanner("spawners")
     _landmark_scanner = CycleScanner("landmarks")
+    _ally_scanner = CycleScanner("allies")
 
     # ---- Mark/tracking system (Alt+scan key to mark, passive updates) ----
     # Supports both units and landmarks. One mark at a time.
@@ -4761,7 +4831,8 @@ if _PyGameView is not None:
             "E, enemy scan. Press repeatedly to cycle, nearest first. Shift reverses.",
             "L, line of sight. Enemy count by type and direction.",
             "N, spawner scan. Press repeatedly to cycle nests. Shift reverses.",
-            "Alt plus E, N, or Q, mark or unmark the last scanned target.",
+            "Y, ally scan. Press repeatedly to cycle allies. Shift reverses.",
+            "Alt plus E, N, Q, or Y, mark or unmark the last scanned target.",
             "Q, landmark scan. Cycle nearest first. Shift Q reverses.",
             "G, charges. Selected spell or all spells.",
             "T, threat. Adjacent enemy count and positions.",
@@ -4817,6 +4888,7 @@ if _PyGameView is not None:
                 _enemy_scanner.turn_reset()
                 _spawner_scanner.turn_reset()
                 _landmark_scanner.turn_reset()
+                _ally_scanner.turn_reset()
 
                 # Marked target update — immediate tier: before turn signal
                 if _mark_tier_immediate[0] and _marked_target[0] is not None and _turn_count[0] > 1:
@@ -4884,6 +4956,8 @@ if _PyGameView is not None:
                     _spawner_scanner.reset()
                 if evt.key != pygame.K_q:
                     _landmark_scanner.reset()
+                if evt.key != pygame.K_y:
+                    _ally_scanner.reset()
                 # Deploy-only number keys: overview (1) and category cycling (2-5)
                 if deploying and evt.key == pygame.K_1:
                     _announce_deploy_overview(self)
@@ -4913,6 +4987,14 @@ if _PyGameView is not None:
                         ref, lvl, qual = _get_scan_reference(self)
                         rev = bool(mods & pygame.KMOD_SHIFT)
                         _query_spawners(self, scan_level=lvl, ref_point=ref, qualifier=qual, reverse=rev)
+                elif evt.key == pygame.K_y:
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_ALT:
+                        _mark_scanned_target()
+                    else:
+                        ref, lvl, qual = _get_scan_reference(self)
+                        rev = bool(mods & pygame.KMOD_SHIFT)
+                        _query_allies(self, scan_level=lvl, ref_point=ref, qualifier=qual, reverse=rev)
                 elif evt.key == pygame.K_g:
                     _query_charges(self)
                 elif evt.key == pygame.K_q:
