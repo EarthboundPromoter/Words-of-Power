@@ -1411,7 +1411,13 @@ def on_death(event):
             batcher.clear()  # Don't flush stale events after death
             text = "You died"
             if event.damage_event and event.damage_event.source:
-                text = f"Killed by {_source_name(event.damage_event.source)}"
+                source = event.damage_event.source
+                # DOT/buff deaths: source is a Buff whose .owner is the unit it's ON
+                # (i.e. the player), not the caster.  Use the buff name directly.
+                if isinstance(source, Level.Buff):
+                    text = f"Killed by {_name(source)}"
+                else:
+                    text = f"Killed by {_source_name(source)}"
             log(f"[Death] {_log_ctx()} {text}")
             batcher.speak_immediate(text)
         else:
@@ -2250,6 +2256,66 @@ if _PyGameView is not None:
         'cascade_range', 'max_channel',
     ]
 
+    def _fmt_attr(a):
+        """Format an attribute name for speech: 'minion_damage' -> 'Minion Damage'."""
+        return ' '.join(w.capitalize() for w in a.replace('_', ' ').split())
+
+    def _format_bonus_lines(obj):
+        """Extract bonus dictionary lines from an Equipment, Spell, or Upgrade object."""
+        lines = []
+        for tag, bonuses in getattr(obj, 'tag_bonuses_pct', {}).items():
+            tag_n = _name(tag)
+            for attr, val in bonuses.items():
+                if val:
+                    lines.append(f"{tag_n} spells gain {int(val)}% {_fmt_attr(attr)}")
+        for tag, bonuses in getattr(obj, 'tag_bonuses', {}).items():
+            tag_n = _name(tag)
+            for attr, val in bonuses.items():
+                if val:
+                    lines.append(f"{tag_n} spells gain {val} {_fmt_attr(attr)}")
+        for spell_class, bonuses in getattr(obj, 'spell_bonuses_pct', {}).items():
+            try:
+                spell_n = spell_class().name
+            except:
+                spell_n = str(spell_class)
+            for attr, val in bonuses.items():
+                if val:
+                    lines.append(f"{spell_n} gains {int(val)}% {_fmt_attr(attr)}")
+        for spell_class, bonuses in getattr(obj, 'spell_bonuses', {}).items():
+            try:
+                spell_n = spell_class().name
+            except:
+                spell_n = str(spell_class)
+            for attr, val in bonuses.items():
+                if val:
+                    lines.append(f"{spell_n} gains {val} {_fmt_attr(attr)}")
+        for attr, val in getattr(obj, 'global_bonuses_pct', {}).items():
+            if val:
+                if val >= 0:
+                    lines.append(f"All spells gain {int(val)}% {_fmt_attr(attr)}")
+                else:
+                    lines.append(f"All spells lose {int(val)}% {_fmt_attr(attr)}")
+        for attr, val in getattr(obj, 'global_bonuses', {}).items():
+            if val:
+                if val >= 0:
+                    lines.append(f"All spells gain {val} {_fmt_attr(attr)}")
+                else:
+                    lines.append(f"All spells lose {val} {_fmt_attr(attr)}")
+        for tag, val in getattr(obj, 'resists', {}).items():
+            if val:
+                lines.append(f"{val}% {_name(tag)} resist")
+        return lines
+
+    def _clean_desc(text):
+        """Strip game markup tags like [9_dark:dark] -> '9 dark' from description text."""
+        import re
+        def _clean_tag(m):
+            content = m.group(1)
+            if ':' in content:
+                content = content.split(':')[0]
+            return content.replace('_', ' ')
+        return re.sub(r'\[([^\]]*)\]', _clean_tag, text)
+
     def _describe_spell(spell):
         """Build a full spoken description of a spell, matching the examine panel."""
         parts = []
@@ -2359,86 +2425,19 @@ if _PyGameView is not None:
             except:
                 pass
 
-        # Equipment/buff bonus dictionaries (tag_bonuses, global_bonuses, resists, etc.)
-        # These store effects that the game renders visually but have no description string.
-        def _fmt_attr(a):
-            return ' '.join(w.capitalize() for w in a.replace('_', ' ').split())
-
-        bonus_lines = []
-
-        # Tag bonuses (percentage)
-        for tag, bonuses in getattr(spell, 'tag_bonuses_pct', {}).items():
-            tag_n = _name(tag)
-            for attr, val in bonuses.items():
-                if val:
-                    bonus_lines.append(f"{tag_n} spells gain {int(val)}% {_fmt_attr(attr)}")
-
-        # Tag bonuses (flat)
-        for tag, bonuses in getattr(spell, 'tag_bonuses', {}).items():
-            tag_n = _name(tag)
-            for attr, val in bonuses.items():
-                if val:
-                    bonus_lines.append(f"{tag_n} spells gain {val} {_fmt_attr(attr)}")
-
-        # Spell-specific bonuses (percentage)
-        for spell_class, bonuses in getattr(spell, 'spell_bonuses_pct', {}).items():
-            try:
-                spell_n = spell_class().name
-            except:
-                spell_n = str(spell_class)
-            for attr, val in bonuses.items():
-                if val:
-                    bonus_lines.append(f"{spell_n} gains {int(val)}% {_fmt_attr(attr)}")
-
-        # Spell-specific bonuses (flat)
-        for spell_class, bonuses in getattr(spell, 'spell_bonuses', {}).items():
-            try:
-                spell_n = spell_class().name
-            except:
-                spell_n = str(spell_class)
-            for attr, val in bonuses.items():
-                if val:
-                    bonus_lines.append(f"{spell_n} gains {val} {_fmt_attr(attr)}")
-
-        # Global bonuses (percentage)
-        for attr, val in getattr(spell, 'global_bonuses_pct', {}).items():
-            if val:
-                if val >= 0:
-                    bonus_lines.append(f"All spells gain {int(val)}% {_fmt_attr(attr)}")
-                else:
-                    bonus_lines.append(f"All spells lose {int(val)}% {_fmt_attr(attr)}")
-
-        # Global bonuses (flat)
-        for attr, val in getattr(spell, 'global_bonuses', {}).items():
-            if val:
-                if val >= 0:
-                    bonus_lines.append(f"All spells gain {val} {_fmt_attr(attr)}")
-                else:
-                    bonus_lines.append(f"All spells lose {val} {_fmt_attr(attr)}")
-
-        # Resists
-        for tag, val in getattr(spell, 'resists', {}).items():
-            if val:
-                bonus_lines.append(f"{val}% {_name(tag)} resist")
-
+        # Equipment/buff bonus dictionaries
+        bonus_lines = _format_bonus_lines(spell)
         if bonus_lines:
             parts.append(". ".join(bonus_lines))
 
-        # Description text (strip game markup like [9_dark:dark] -> "9 dark")
-        import re
+        # Description text
         desc = ""
         if hasattr(spell, 'get_description'):
             desc = spell.get_description() or ''
         elif hasattr(spell, 'description'):
             desc = spell.description or ''
         if desc:
-            def _clean_tag(m):
-                content = m.group(1)
-                if ':' in content:
-                    content = content.split(':')[0]
-                return content.replace('_', ' ')
-            desc = re.sub(r'\[([^\]]*)\]', _clean_tag, desc)
-            parts.append(desc)
+            parts.append(_clean_desc(desc))
 
         # Attributes (damage, radius, duration, etc.)
         attrs = []
@@ -2627,7 +2626,7 @@ if _PyGameView is not None:
     _suppress_char_sheet_for_purchase = [False]
 
     def patched_try_buy_shop_selection(self, prompt=True):
-        """Announce purchase result after buy attempt."""
+        """Open buy prompt (confirm dialog). Purchase announcement is in confirm_buy hook."""
         target = self._examine_target
         target_name = _name(target) if target else None
 
@@ -2645,25 +2644,44 @@ if _PyGameView is not None:
             if is_owned_spell:
                 # Opened upgrades view — patched_open_shop handles announcement
                 return
+        except Exception as e:
+            _suppress_char_sheet_for_purchase[0] = False
+            log(f"[Shop] Buy announce error: {e}")
 
-            # Check if purchase happened: shop type/state changed or target removed
-            if target_name and self.state != getattr(_main, 'STATE_SHOP', 2):
-                # Shop closed after purchase — speak purchase, then char sheet
-                async_tts.speak(f"Learned {target_name}")
-                log(f"[Shop] Purchased: {target_name}")
-                # Speak char sheet overview after purchase (was suppressed)
+    _original_confirm_buy = _PyGameView.confirm_buy
+
+    def patched_confirm_buy(self):
+        """Announce purchase after player confirms the buy dialog."""
+        purchased = getattr(self, 'chosen_purchase', None)
+        purchase_name = _name(purchased) if purchased else None
+        _suppress_char_sheet_for_purchase[0] = True
+
+        _original_confirm_buy(self)
+
+        _suppress_char_sheet_for_purchase[0] = False
+        try:
+            if purchase_name:
+                if isinstance(purchased, Level.Equipment):
+                    text = f"Equipped {purchase_name}"
+                elif isinstance(purchased, Level.Spell):
+                    text = f"Learned {purchase_name}"
+                else:
+                    text = f"Purchased {purchase_name}"
+                async_tts.speak(text)
+                log(f"[Shop] {text}")
+                # Speak char sheet overview after purchase
                 try:
                     _speak_char_sheet_overview(self)
                 except Exception:
                     pass
         except Exception as e:
-            _suppress_char_sheet_for_purchase[0] = False
-            log(f"[Shop] Buy announce error: {e}")
+            log(f"[Shop] Confirm buy announce error: {e}")
 
     _PyGameView.shop_selection_adjust = patched_shop_selection_adjust
     _PyGameView.shop_page_adjust = patched_shop_page_adjust
     _PyGameView.open_shop = patched_open_shop
     _PyGameView.try_buy_shop_selection = patched_try_buy_shop_selection
+    _PyGameView.confirm_buy = patched_confirm_buy
     log("  Shop navigation hooks installed")
 
     # ---- Shop Filter Hooks ----
@@ -2786,49 +2804,25 @@ if _PyGameView is not None:
         if target is _LEARN_SKILL:
             return "Learn New Skill. Press Enter to open skill shop"
 
-        # Player spell
+        # Player spell — use full _describe_spell (same as shop)
         if isinstance(target, Level.Spell) and target in view.game.p1.spells:
-            name = _name(target)
-            charges = getattr(target, 'cur_charges', 0)
-            max_ch = 0
-            try:
-                max_ch = target.get_stat('max_charges')
-            except:
-                max_ch = getattr(target, 'max_charges', 0)
-            rng = 0
-            try:
-                rng = target.get_stat('range')
-            except:
-                rng = getattr(target, 'range', 0)
-            parts = [name]
-            if max_ch:
-                parts.append(f"{charges} of {max_ch} charges")
-            if getattr(target, 'melee', False):
-                parts.append("Melee")
-            elif rng:
-                parts.append(f"Range {rng}")
-            desc = getattr(target, 'description', '')
-            if desc:
-                # First sentence only for brevity
-                first = desc.split('\n')[0].split('.')[0]
-                if first:
-                    parts.append(first)
-            return ". ".join(parts)
+            return _describe_spell(target)
 
-        # Equipment
+        # Equipment — full description with bonuses
         if isinstance(target, Level.Equipment):
             name = _name(target)
             slot = _SLOT_NAMES.get(getattr(target, 'slot', -1), "Equipment")
+            parts = [f"{slot}: {name}"]
+            bonus_lines = _format_bonus_lines(target)
+            if bonus_lines:
+                parts.append(". ".join(bonus_lines))
             desc = ''
             try:
                 desc = target.get_description() or ''
             except:
-                desc = getattr(target, 'description', '')
-            parts = [f"{slot}: {name}"]
+                desc = getattr(target, 'description', '') or ''
             if desc:
-                first = desc.split('\n')[0].split('.')[0]
-                if first:
-                    parts.append(first)
+                parts.append(_clean_desc(desc))
             return ". ".join(parts)
 
         # Skill (passive buff without prereq) or spell upgrade (has prereq)
@@ -2836,20 +2830,38 @@ if _PyGameView is not None:
             name = _name(target)
             prereq = getattr(target, 'prereq', None)
             if prereq:
-                # Spell upgrade
-                return f"Upgrade: {name} for {_name(prereq)}"
-            else:
-                # Skill
+                # Spell upgrade — include description and level
+                parts = [f"Upgrade: {name} for {_name(prereq)}"]
+                level = getattr(target, 'level', 0)
+                if level:
+                    parts.append(f"Level {level}")
+                bonus_lines = _format_bonus_lines(target)
+                if bonus_lines:
+                    parts.append(". ".join(bonus_lines))
                 desc = ''
                 try:
                     desc = target.get_description() or ''
                 except:
-                    desc = getattr(target, 'description', '')
-                parts = [f"Skill: {name}"]
+                    desc = getattr(target, 'description', '') or ''
                 if desc:
-                    first = desc.split('\n')[0].split('.')[0]
-                    if first:
-                        parts.append(first)
+                    parts.append(_clean_desc(desc))
+                return ". ".join(parts)
+            else:
+                # Skill — full description
+                parts = [f"Skill: {name}"]
+                level = getattr(target, 'level', 0)
+                if level:
+                    parts.append(f"Level {level}")
+                bonus_lines = _format_bonus_lines(target)
+                if bonus_lines:
+                    parts.append(". ".join(bonus_lines))
+                desc = ''
+                try:
+                    desc = target.get_description() or ''
+                except:
+                    desc = getattr(target, 'description', '') or ''
+                if desc:
+                    parts.append(_clean_desc(desc))
                 return ". ".join(parts)
 
         # Buff (generic — shouldn't normally appear but handle gracefully)
@@ -2860,7 +2872,7 @@ if _PyGameView is not None:
         # Fallback for any TooltipExamineTarget or unknown
         desc = getattr(target, 'description', '')
         if desc:
-            return desc
+            return _clean_desc(desc)
         return str(target)
 
     def _char_sheet_section_name(view):
@@ -3220,13 +3232,7 @@ if _PyGameView is not None:
                 if not desc and hasattr(spell, 'get_description'):
                     desc = spell.get_description()
                 if desc:
-                    def _clean_tag(m):
-                        content = m.group(1)
-                        if ':' in content:
-                            content = content.split(':')[0]
-                        return content.replace('_', ' ')
-                    desc = re.sub(r'\[([^\]]*)\]', _clean_tag, desc)
-                    s_parts.append(desc)
+                    s_parts.append(_clean_desc(desc))
 
                 spell_descs.append(", ".join(s_parts))
 
@@ -4948,6 +4954,14 @@ if _PyGameView is not None:
         try:
             for evt in self.events:
                 if evt.type != pygame.KEYDOWN:
+                    continue
+                # Skip modifier-only keys — Shift/Alt/Ctrl fire their own KEYDOWN
+                # before the letter key.  Without this guard, pressing Shift+E would
+                # reset the enemy scanner on the Shift event, then rebuild from
+                # scratch on the E event, killing reverse-cycling.
+                if evt.key in (pygame.K_LSHIFT, pygame.K_RSHIFT,
+                               pygame.K_LALT, pygame.K_RALT,
+                               pygame.K_LCTRL, pygame.K_RCTRL):
                     continue
                 # Reset scan cycling on keys that aren't the respective scan key
                 if evt.key != pygame.K_e:
