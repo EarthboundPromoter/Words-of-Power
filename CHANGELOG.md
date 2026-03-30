@@ -2,6 +2,27 @@
 
 All notable changes to Words of Power are documented here.
 
+## [0.2.1] - 2026-03-28
+
+### Character Sheet & Detail Overhaul
+
+- **Character sheet full voicing** — Spells, equipment, upgrades, and skills now read complete data (tags, range, bonuses, full description) instead of first-sentence truncation. Same detail level as the shop.
+- **D-key describes everything** — No longer unit-only. Full detail on units (including player), portals, shops/shrines, equipment pickups, spell scrolls, consumables, clouds, and terrain. Works in all modes (normal, targeting, look, deploy).
+
+### New Features
+
+- **Y-key ally scanner** — Cycle through allied units one at a time, nearest first. Shift+Y reverses. Alt+Y marks.
+- **Shift+F ally overview** — Buffered list of all allies with HP, nearest first. Each entry is a separate chunk for [ ] review.
+- **Deploy overview buffer splitting** — Key 1 overview now splits per-quadrant for [ ] navigation.
+- **Coordinate toggle** — `settings.ini` option (`show_coordinates = true`) appends grid coordinates to movement, scans, combat, look mode, targeting, and deploy.
+
+### Bug Fixes
+
+- **Scan reverse cycling** — Shift+E/N/Q/Y was broken (modifier keydown reset the scanner). Fixed across all four scanners.
+- **Death attribution** — DOT/buff deaths (poison, etc.) now name the effect instead of "Killed by Wizard".
+- **Purchase confirmation** — Fires on actual purchase, not when confirm dialog opens. Distinguishes "Learned" / "Equipped" / "Purchased".
+- **GH#12 closed** — Bestiary raw object was already fixed.
+
 ## [0.2.0] - 2026-03-06
 
 ### Q-Key Landmark Cycling + Scanner Unification
