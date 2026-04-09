@@ -20,8 +20,10 @@ All notable changes to Words of Power are documented here.
 
 - **Scan reverse cycling** — Shift+E/N/Q/Y was broken (modifier keydown reset the scanner). Fixed across all four scanners.
 - **Death attribution** — DOT/buff deaths (poison, etc.) now name the effect instead of "Killed by Wizard".
-- **Purchase confirmation** — Fires on actual purchase, not when confirm dialog opens. Distinguishes "Learned" / "Equipped" / "Purchased".
-- **GH#12 closed** — Bestiary raw object was already fixed.
+- **Purchase confirmation** — Fires on actual purchase, not when confirm dialog opens. Distinguishes "Learned" / "Equipped" / "Purchased". Log now includes SP cost.
+- **Deploy overview pickup counts** — Key 1 overview now counts pickups (heals, charges, hearts, scrolls, equipment) per quadrant alongside orbs and shops.
+- **Staff/equipment effects** — All code paths now show equipment bonuses: shop, character sheet, D-key, and equip-on-pickup.
+- **GH#1, #2, #3, #10, #11, #12 closed.**
 
 ## [0.2.0] - 2026-03-06
 
