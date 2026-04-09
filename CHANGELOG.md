@@ -10,6 +10,13 @@ All notable changes to Words of Power are documented here.
 - **NVDA fallback preserved** — If Tolk.dll is not present, falls back to direct NVDA DLL calls (previous behavior).
 - **SAPI as last resort** — SAPI is enabled but deprioritized so real screen readers are always preferred.
 
+### All Game Screens Now Voiced
+
+- **Key rebind screen** — Full voicing of the rebind controls menu. Announces function name, slot (primary/secondary), and current key binding on navigation. "Press a key to bind" prompt when entering rebind mode.
+- **Custom game setup** — Mutator browser with name and description readout. Announces selected mutators and play button with count.
+- **Mutator parameter picker** — Voiced navigation of parameter options for configurable mutators.
+- **Mutator value entry** — Speaks each digit as typed, announces backspace. No unvoiced screens remain.
+
 ## [0.2.1] - 2026-03-28
 
 ### Character Sheet & Detail Overhaul

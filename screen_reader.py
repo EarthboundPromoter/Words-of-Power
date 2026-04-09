@@ -5522,12 +5522,7 @@ if _PyGameView is not None:
 
     # States that are NOT YET VOICED — announce "coming soon" on entry
     # These have no input processor patch, so this is the only speech they get.
-    _UNVOICED_STATES = {
-        _STATE_REBIND,
-        _STATE_SETUP_CUSTOM,
-        _STATE_PICK_MUTATOR_PARAMS,
-        _STATE_ENTER_MUTATOR_VALUE,
-    }
+    _UNVOICED_STATES = set()
 
     # States where the per-state input patch already handles a richer entry
     # announcement. The centralized hook skips these to avoid double-speaking.
@@ -5542,6 +5537,10 @@ if _PyGameView is not None:
         _STATE_COMBAT_LOG,
         _STATE_CHAR_SHEET,  # open_char_sheet hook announces
         _STATE_SHOP,        # open_shop hook announces
+        _STATE_REBIND,
+        _STATE_SETUP_CUSTOM,
+        _STATE_PICK_MUTATOR_PARAMS,
+        _STATE_ENTER_MUTATOR_VALUE,
     }
 
     # KEY_BIND constants for keybind resolution
@@ -5600,6 +5599,18 @@ if _PyGameView is not None:
 
         if state == _STATE_REMINISCE:
             return f"{nav_lr} to browse slides. {abort} to exit"
+
+        if state == _STATE_REBIND:
+            return f"{nav_ud} to navigate bindings. {nav_lr} for primary or secondary. {confirm} to rebind. {abort} to save and exit"
+
+        if state == _STATE_SETUP_CUSTOM:
+            return f"{nav_ud} to browse mutators. {nav_lr} between available, play, and selected. {confirm} to add or remove. {abort} to cancel"
+
+        if state == _STATE_PICK_MUTATOR_PARAMS:
+            return f"{nav_ud} to browse options. {confirm} to select. {abort} to cancel"
+
+        if state == _STATE_ENTER_MUTATOR_VALUE:
+            return f"Type a number. {confirm} to accept. {abort} to cancel"
 
         if state == _STATE_COMBAT_LOG:
             return f"{nav_ud} to scroll. {nav_lr} to change turn. {abort} to close"
@@ -6051,7 +6062,175 @@ if _PyGameView is not None:
     _PyGameView.process_combat_log_input = _patched_process_combat_log
     log("  Combat log voicing installed")
 
-    log("  State screen voicing: 8 states with full navigation + centralized transition detector for all 15")
+    # ---- STATE_REBIND (key rebinding screen) ----
+    _orig_process_rebind = _PyGameView.process_key_rebind
+    _sr_rebind_entered = [False]
+
+    import pygame as _pygame
+
+    def _rebind_label(view):
+        """Build spoken label for the current rebind cursor position."""
+        target = view.examine_target
+        if isinstance(target, list):
+            bind_id, col = target[0], target[1]
+            _kn = getattr(_main, 'key_names', {})
+            func_name = _kn.get(bind_id, f"Bind {bind_id}")
+            key1, key2 = view.new_key_binds.get(bind_id, (None, None))
+            key_val = [key1, key2][col]
+            key_str = _pygame.key.name(key_val) if key_val else "Unbound"
+            slot = "primary" if col == 0 else "secondary"
+            return f"{func_name}. {slot}. {key_str}"
+        _KBA = getattr(_main, 'KEY_BIND_OPTION_ACCEPT', None)
+        _KBR = getattr(_main, 'KEY_BIND_OPTION_RESET', None)
+        if target == _KBA:
+            return "Done"
+        elif target == _KBR:
+            return "Reset to Default"
+        return ""
+
+    def _patched_process_rebind(self):
+        if not _sr_rebind_entered[0]:
+            _sr_rebind_entered[0] = True
+            label = _rebind_label(self)
+            async_tts.speak(f"Rebind Controls. {label}" if label else "Rebind Controls")
+            log("[State] REBIND entered")
+
+        prev_sel = str(self.examine_target)
+        prev_rebinding = getattr(self, 'rebinding', False)
+        _orig_process_rebind(self)
+
+        if self.state != _STATE_REBIND:
+            _sr_rebind_entered[0] = False
+            return
+
+        cur_rebinding = getattr(self, 'rebinding', False)
+        if cur_rebinding and not prev_rebinding:
+            async_tts.speak("Press a key to bind")
+            log("[State] REBIND: awaiting key press")
+        elif not cur_rebinding and prev_rebinding:
+            # Just finished binding
+            label = _rebind_label(self)
+            async_tts.speak(f"Bound. {label}")
+            log(f"[State] REBIND set: {label}")
+        elif str(self.examine_target) != prev_sel and not cur_rebinding:
+            label = _rebind_label(self)
+            if label:
+                async_tts.speak(label)
+                log(f"[State] REBIND: {label}")
+
+    _PyGameView.process_key_rebind = _patched_process_rebind
+    log("  Key rebind voicing installed")
+
+    # ---- STATE_SETUP_CUSTOM (custom game mutator selection) ----
+    _orig_process_setup_custom = _PyGameView.process_setup_custom_input
+    _sr_setup_custom_entered = [False]
+
+    def _mutator_label(view, target):
+        """Build spoken label for a mutator or special target in custom setup."""
+        if target == "play":
+            n = len(view.custom_mutators) if hasattr(view, 'custom_mutators') else 0
+            return f"Play. {n} mutator{'s' if n != 1 else ''} selected"
+        if target is None:
+            return ""
+        # Active (configured) mutator instance
+        custom = getattr(view, 'custom_mutators', [])
+        if custom and target in custom:
+            name = getattr(target, 'name', target.__class__.__name__)
+            desc = getattr(target, 'description', '')
+            first_line = desc.split('\n')[0] if desc else ''
+            return f"Selected. {name}. {first_line}" if first_line else f"Selected. {name}"
+        # Available mutator class
+        _all_mut = getattr(_main, 'all_mutators', [])
+        if target in _all_mut:
+            name = target.__name__ if hasattr(target, '__name__') else str(target)
+            try:
+                desc = view.get_placeholder_description(target)
+                first_line = desc.split('\n')[0] if desc else ''
+            except Exception:
+                first_line = ''
+            return f"{name}. {first_line}" if first_line else name
+        return str(target)
+
+    def _patched_process_setup_custom(self):
+        if not _sr_setup_custom_entered[0]:
+            _sr_setup_custom_entered[0] = True
+            label = _mutator_label(self, self.examine_target)
+            async_tts.speak(f"Custom Game Setup. {label}" if label else "Custom Game Setup")
+            log("[State] SETUP_CUSTOM entered")
+
+        prev_sel = self.examine_target
+        _orig_process_setup_custom(self)
+
+        if self.state != _STATE_SETUP_CUSTOM:
+            _sr_setup_custom_entered[0] = False
+        elif self.examine_target != prev_sel and self.examine_target is not None:
+            label = _mutator_label(self, self.examine_target)
+            if label:
+                async_tts.speak(label)
+                log(f"[State] SETUP_CUSTOM: {label}")
+
+    _PyGameView.process_setup_custom_input = _patched_process_setup_custom
+    log("  Custom game setup voicing installed")
+
+    # ---- STATE_PICK_MUTATOR_PARAMS (mutator parameter selection) ----
+    _orig_process_pick_params = _PyGameView.process_pick_mutator_params_input
+    _sr_pick_params_entered = [False]
+
+    def _patched_process_pick_params(self):
+        if not _sr_pick_params_entered[0]:
+            _sr_pick_params_entered[0] = True
+            mut_name = getattr(self, 'pending_mutator_class', None)
+            mut_name = mut_name.__name__ if mut_name else "Mutator"
+            label = self.format_param_value(self.examine_target) if self.examine_target else ""
+            async_tts.speak(f"{mut_name}. Select parameter. {label}" if label else f"{mut_name}. Select parameter")
+            log("[State] PICK_MUTATOR_PARAMS entered")
+
+        prev_sel = self.examine_target
+        _orig_process_pick_params(self)
+
+        if self.state != _STATE_PICK_MUTATOR_PARAMS:
+            _sr_pick_params_entered[0] = False
+        elif self.examine_target != prev_sel and self.examine_target is not None:
+            label = self.format_param_value(self.examine_target)
+            if label:
+                async_tts.speak(label)
+                log(f"[State] PICK_MUTATOR_PARAMS: {label}")
+
+    _PyGameView.process_pick_mutator_params_input = _patched_process_pick_params
+    log("  Mutator parameter picker voicing installed")
+
+    # ---- STATE_ENTER_MUTATOR_VALUE (numeric value entry) ----
+    _orig_process_enter_value = _PyGameView.process_enter_mutator_value_input
+    _sr_enter_value_entered = [False]
+
+    def _patched_process_enter_value(self):
+        if not _sr_enter_value_entered[0]:
+            _sr_enter_value_entered[0] = True
+            mut_name = getattr(self, 'pending_mutator_class', None)
+            mut_name = mut_name.__name__ if mut_name else "Mutator"
+            async_tts.speak(f"{mut_name}. Enter a value")
+            log("[State] ENTER_MUTATOR_VALUE entered")
+
+        prev_buf = getattr(self, 'pending_value_buffer', '')
+        _orig_process_enter_value(self)
+
+        if self.state != _STATE_ENTER_MUTATOR_VALUE:
+            _sr_enter_value_entered[0] = False
+        else:
+            cur_buf = getattr(self, 'pending_value_buffer', '')
+            if cur_buf != prev_buf:
+                if len(cur_buf) > len(prev_buf):
+                    # New digit typed — speak just the digit
+                    async_tts.speak(cur_buf[-1])
+                elif len(cur_buf) < len(prev_buf):
+                    # Backspace — speak remaining or "empty"
+                    async_tts.speak(cur_buf if cur_buf else "empty")
+                log(f"[State] ENTER_VALUE: {cur_buf}")
+
+    _PyGameView.process_enter_mutator_value_input = _patched_process_enter_value
+    log("  Mutator value entry voicing installed")
+
+    log("  State screen voicing: 12 states with full navigation + centralized transition detector for all 15")
 
 else:
     log("[WARNING] Could not find PyGameView class - UI hooks not installed")
