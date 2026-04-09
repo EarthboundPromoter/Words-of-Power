@@ -1,5 +1,5 @@
 # Rift Wizard 2 Screen Reader Mod — Words of Power
-MOD_VERSION = "0.2.1"
+MOD_VERSION = "0.2.2"
 
 import sys
 import os
@@ -77,29 +77,98 @@ cfg = _Cfg()
 log(f"[Settings] show_coordinates = {cfg.show_coordinates}")
 
 # ============================================================================
-# NVDA INTEGRATION
+# TTS INTEGRATION — Tolk
 # ============================================================================
-# DLL exports (verified via PE export table inspection):
-#   nvdaController_testIfRunning  -> returns 0 if NVDA is running
-#   nvdaController_speakText      -> speaks text via NVDA
-#   nvdaController_cancelSpeech   -> cancels current speech
-#   nvdaController_brailleMessage -> sends braille output
+# Tolk is a screen reader abstraction DLL that auto-detects the active screen
+# reader (NVDA, JAWS, SAPI5, Window-Eyes, SuperNova, System Access, ZoomText)
+# and provides simple C functions: Tolk_Speak, Tolk_Silence, etc.
+#
+# Falls back to direct NVDA DLL calls if Tolk.dll is not present.
 # ============================================================================
 
-class NVDATTS:
-    """Direct NVDA integration using ctypes."""
+import traceback as _traceback
+
+class _TolkTTS:
+    """Screen reader TTS via Tolk abstraction library."""
+
+    def __init__(self):
+        self.tolk = None
+        self.enabled = False
+
+        dll_path = os.path.join(mod_dir, "Tolk.dll")
+        if not os.path.exists(dll_path):
+            log("[Tolk] DLL not found at: " + dll_path)
+            return
+
+        try:
+            self.tolk = ctypes.cdll[dll_path]
+
+            # Configure function signatures
+            self.tolk.Tolk_Load.restype = None
+            self.tolk.Tolk_Unload.restype = None
+            self.tolk.Tolk_TrySAPI.restype = None
+            self.tolk.Tolk_TrySAPI.argtypes = [ctypes.c_bool]
+            self.tolk.Tolk_DetectScreenReader.restype = ctypes.c_wchar_p
+            self.tolk.Tolk_Speak.restype = ctypes.c_bool
+            self.tolk.Tolk_Speak.argtypes = [ctypes.c_wchar_p, ctypes.c_bool]
+            self.tolk.Tolk_Silence.restype = ctypes.c_bool
+
+            # Tolk uses LoadLibrary() with bare DLL names (e.g.
+            # "nvdaControllerClient64.dll") inside its native code.
+            # SetDllDirectoryW adds to the Windows LoadLibrary search path
+            # so Tolk can find screen reader driver DLLs in the mod folder.
+            ctypes.windll.kernel32.SetDllDirectoryW(mod_dir)
+            log(f"[Tolk] Set DLL search directory to mod dir")
+
+            # Enable SAPI as last-resort fallback (not preferred over
+            # real screen readers), then initialize
+            self.tolk.Tolk_TrySAPI(True)
+            self.tolk.Tolk_PreferSAPI.restype = None
+            self.tolk.Tolk_PreferSAPI.argtypes = [ctypes.c_bool]
+            self.tolk.Tolk_PreferSAPI(False)
+            self.tolk.Tolk_Load()
+
+            sr = self.tolk.Tolk_DetectScreenReader()
+            if sr:
+                self.enabled = True
+                log(f"[Tolk] Screen reader detected: {sr}")
+            else:
+                log("[Tolk] No active screen reader found")
+                log("[Tolk] Make sure a screen reader is running before starting the game")
+
+        except Exception as e:
+            log(f"[Tolk] ERROR during initialization: {e}")
+            log(_traceback.format_exc())
+
+    def speak(self, text):
+        if self.enabled:
+            try:
+                self.tolk.Tolk_Speak(text, False)
+            except Exception as e:
+                log(f"[Tolk] Error speaking: {e}")
+                log(f"[Fallback] {text}")
+        else:
+            log(f"[TTS] {text}")
+
+    def cancel(self):
+        if self.enabled:
+            try:
+                self.tolk.Tolk_Silence()
+            except Exception as e:
+                log(f"[Tolk] Error canceling speech: {e}")
+
+
+class _DirectNVDA:
+    """Fallback: direct NVDA DLL calls (pre-Tolk approach)."""
 
     def __init__(self):
         self.nvda = None
         self.enabled = False
 
         dll_path = os.path.join(mod_dir, "nvdaControllerClient64.dll")
-
         if not os.path.exists(dll_path):
             log("[NVDA] ERROR: DLL not found at: " + dll_path)
             return
-
-        log(f"[NVDA] Found DLL: {dll_path}")
 
         try:
             # Initialize COM on main thread before any DLL calls
@@ -110,59 +179,42 @@ class NVDATTS:
                 log(f"[NVDA] COM init warning: {e}")
 
             self.nvda = ctypes.CDLL(dll_path)
-            log("[NVDA] DLL loaded successfully")
-
-            # Configure testIfRunning function
             self.nvda.nvdaController_testIfRunning.restype = ctypes.c_long
-
-            # Test if NVDA is running
             result = self.nvda.nvdaController_testIfRunning()
-            log(f"[NVDA] testIfRunning returned: {result}")
-
             if result == 0:
-                log("[NVDA] NVDA is running!")
-
-                # Configure speakText function
                 self.nvda.nvdaController_speakText.argtypes = [ctypes.c_wchar_p]
                 self.nvda.nvdaController_speakText.restype = ctypes.c_long
-
-                # Configure cancelSpeech function
                 self.nvda.nvdaController_cancelSpeech.restype = ctypes.c_long
-
                 self.enabled = True
-                log("[NVDA] TTS engine initialized successfully!")
+                log("[NVDA] Direct DLL fallback initialized")
             else:
-                log(f"[NVDA] NVDA is not running (code {result})")
-                log("[NVDA] Make sure NVDA is running before starting the game")
-
+                log(f"[NVDA] NVDA not running (code {result})")
         except Exception as e:
-            log(f"[NVDA] ERROR during initialization: {e}")
-            import traceback
-            log(traceback.format_exc())
+            log(f"[NVDA] ERROR: {e}")
 
     def speak(self, text):
-        """Speak text via NVDA."""
         if self.enabled:
             try:
-                result = self.nvda.nvdaController_speakText(text)
-                if result != 0:
-                    log(f"[NVDA] speakText returned error: {result}")
+                self.nvda.nvdaController_speakText(text)
             except Exception as e:
                 log(f"[NVDA] Error speaking: {e}")
-                log(f"[Fallback] {text}")
         else:
             log(f"[TTS] {text}")
 
     def cancel(self):
-        """Cancel current NVDA speech."""
         if self.enabled:
             try:
                 self.nvda.nvdaController_cancelSpeech()
             except Exception as e:
-                log(f"[NVDA] Error canceling speech: {e}")
+                log(f"[NVDA] Error canceling: {e}")
 
-# Initialize NVDA TTS
-tts = NVDATTS()
+
+# Initialize TTS — Tolk if available, direct NVDA DLL otherwise
+tts = _TolkTTS()
+if not tts.enabled:
+    log("[TTS] Tolk not available or no screen reader, trying direct NVDA DLL")
+    tts = _DirectNVDA()
+
 # All DLL calls go through async_tts (SyncTTS wrapper) for consistent history tracking.
 log(f"Words of Power v{MOD_VERSION} initialization complete")
 

@@ -2,6 +2,14 @@
 
 All notable changes to Words of Power are documented here.
 
+## [0.2.2] - 2026-04-09
+
+### Multi-Screen-Reader Support
+
+- **Tolk integration** — TTS now uses the Tolk abstraction library, which auto-detects the active screen reader. Supports NVDA, JAWS, SAPI5, Window-Eyes, SuperNova, System Access, and ZoomText.
+- **NVDA fallback preserved** — If Tolk.dll is not present, falls back to direct NVDA DLL calls (previous behavior).
+- **SAPI as last resort** — SAPI is enabled but deprioritized so real screen readers are always preferred.
+
 ## [0.2.1] - 2026-03-28
 
 ### Character Sheet & Detail Overhaul
