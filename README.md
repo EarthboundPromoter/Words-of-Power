@@ -1,8 +1,8 @@
 # Words of Power
 
-**Version 0.2.0**
+**Version 0.2.2**
 
-An accessibility mod for Rift Wizard 2 that provides full speech output through NVDA.
+An accessibility mod for Rift Wizard 2 that provides full speech output through NVDA, JAWS, and other screen readers.
 
 ## About Rift Wizard 2
 
@@ -13,7 +13,7 @@ An accessibility mod for Rift Wizard 2 that provides full speech output through 
 ## Requirements
 
 - [Rift Wizard 2](https://store.steampowered.com/app/2058570/Rift_Wizard_2/) (Steam, Windows)
-- [NVDA](https://www.nvaccess.org/) screen reader
+- A screen reader: [NVDA](https://www.nvaccess.org/), [JAWS](https://www.freedomscientific.com/products/software/jaws/), or any screen reader supported by [Tolk](https://github.com/dkager/tolk) (Window-Eyes, SuperNova, System Access, ZoomText, SAPI5)
 
 ## Download
 
@@ -23,14 +23,15 @@ Click the link above, then download the `.zip` file listed under Assets.
 
 ## Quick Start
 
-1. NVDA must be running before you launch the game.
+1. Your screen reader must be running before you launch the game.
 2. Extract the downloaded zip. Copy the `screen_reader` folder into `RiftWizard2/mods/` so the path looks like `RiftWizard2/mods/screen_reader/screen_reader.py`. (Create the `mods` folder if it doesn't exist.)
-3. Launch the game normally. You'll hear "Words of Power version 0.2.0" if it's working.
-4. Debug log writes to `screen_reader_debug.log` in the mod folder.
+3. Make sure `Tolk.dll` is in the `screen_reader` folder alongside `screen_reader.py`. If Tolk.dll is not present, the mod falls back to direct NVDA support only.
+4. Launch the game normally. You'll hear "Words of Power version 0.2.2" if it's working.
+5. Debug log writes to `screen_reader_debug.log` in the mod folder.
 
 ## How It Works
 
-The mod hooks into the game's Python source and voices every gameplay-relevant event. The goal is for the mod to disappear — you're not using an accessibility tool, you're just playing Rift Wizard 2. Where a sighted player sees a small damage number and infers "resisted," you hear "resisted." The same information, the same challenge, the same game.
+The mod hooks into the game's Python source and voices every gameplay-relevant event. All game screens are fully accessible — menus, shops, character sheets, combat, deploy, custom game setup, key rebinding, everything. The goal is for the mod to disappear — you're not using an accessibility tool, you're just playing Rift Wizard 2. Where a sighted player sees a small damage number and infers "resisted," you hear "resisted." The same information, the same challenge, the same game.
 
 Every death should be attributable to your decisions, never to missing information.
 
@@ -68,7 +69,7 @@ The game's own controls are unchanged. Press H in-game for its native help scree
 | **B** | Spatial raycast — walkable distance in all 8 directions |
 | **X** | Hazard scan — clouds, storms, fire, webs |
 | **T** | Threat check — adjacent melee danger (safe / pressed / surrounded) |
-| **D** | Unit detail — full abilities, passives, resistances, movement |
+| **D** | Detail — full info on whatever is under the cursor (units, portals, shops, terrain, props) |
 
 ### Unit Marking
 
@@ -86,6 +87,7 @@ Marked targets are tagged in scan output and get a direction update each turn. O
 | Key | Function |
 |-----|----------|
 | **F** | Vitals — HP, shields, SP, active effects and durations |
+| **Shift+F** | Ally overview — buffered list of all allies with HP |
 | **G** | Charges — selected spell's charges, or all spells if none selected |
 
 ### Speech Control
@@ -96,6 +98,12 @@ Marked targets are tagged in scan output and get a direction update each turn. O
 | **Z** | Repeat last message |
 | **[** | Speech history back (200 messages stored) |
 | **]** | Speech history forward |
+
+### Movement
+
+| Key | Function |
+|-----|----------|
+| **RCtrl+Arrow** | Diagonal movement (Up=NW, Right=NE, Down=SE, Left=SW) |
 
 ### Deploy Mode
 
@@ -142,4 +150,5 @@ See [CHANGELOG.md](CHANGELOG.md).
 ## Credits
 
 - Rift Wizard 2 by Dylan White
+- [Tolk](https://github.com/dkager/tolk) by Davy Kager
 - [NVDA](https://www.nvaccess.org/) by NV Access
