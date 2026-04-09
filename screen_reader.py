@@ -2668,7 +2668,13 @@ if _PyGameView is not None:
                 else:
                     text = f"Purchased {purchase_name}"
                 async_tts.speak(text)
-                log(f"[Shop] {text}")
+                # Log with SP cost for session reconstruction
+                cost = ""
+                try:
+                    cost = f" ({self.game.get_upgrade_cost(purchased)} SP)"
+                except:
+                    pass
+                log(f"[Shop] {text}{cost}")
                 # Speak char sheet overview after purchase
                 try:
                     _speak_char_sheet_overview(self)
@@ -4797,6 +4803,7 @@ if _PyGameView is not None:
 
             # Count notable props by quadrant
             orb_counts = {}   # quadrant -> count
+            pickup_counts = {}  # quadrant -> count
             for tile in level.iter_tiles():
                 prop = tile.prop
                 if prop is None:
@@ -4805,6 +4812,9 @@ if _PyGameView is not None:
                 q = _quadrant_label(tile.x, tile.y)
                 if cls == 'ManaDot':
                     orb_counts[q] = orb_counts.get(q, 0) + 1
+                elif cls in ('HealDot', 'ChargeDot', 'HeartDot', 'GoldDot',
+                             'SpellScroll', 'EquipPickup', 'ItemPickup'):
+                    pickup_counts[q] = pickup_counts.get(q, 0) + 1
                 elif cls == 'PlaceOfPower':
                     tag = getattr(prop, 'tag', None)
                     tag_name = getattr(tag, 'name', '') if tag else ''
@@ -4815,9 +4825,11 @@ if _PyGameView is not None:
                 elif cls == 'NPC':
                     quads[q]["props"].append(_name(prop))
 
-            # Add orb counts to props
+            # Add orb and pickup counts to props
             for q, count in orb_counts.items():
                 quads[q]["props"].append(f"{count} orb{'s' if count > 1 else ''}")
+            for q, count in pickup_counts.items():
+                quads[q]["props"].append(f"{count} pickup{'s' if count > 1 else ''}")
 
             # Build speech chunks — one per category for [/] buffer navigation
             chunks = [f"Deploy, level {level_num}"]
