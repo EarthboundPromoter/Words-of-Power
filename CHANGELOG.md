@@ -2,6 +2,20 @@
 
 All notable changes to Words of Power are documented here.
 
+## [0.2.3] - 2026-04-10
+
+### New Features
+
+- **PgUp/PgDn tooltip cycling** — Spell upgrades, summoned unit stat blocks, and equipment details are now voiced when cycling through extra examine tooltips. Previously this was completely silent, blocking access to pre-purchase evaluation of spell upgrades and summon stats.
+- **Screen-reader-friendly keybinds** — Tooltip cycling rebound from PgUp/PgDn (which conflict with NVDA numpad passthrough) to **Backslash** (prev) and **Backspace** (next). PgUp/PgDn kept as secondary bindings. Fast Forward unbound to free Backspace. Migration happens automatically on first load with a one-time announcement; players can rebind in Options at any time.
+- **Level-complete stats summary** — Clearing a level now reads the full stats summary (turns, spell casts, damage dealt/taken, items used, purchases) via buffered speech. Use [ ] to navigate sections. Previously only the gameover screen had stats voicing.
+- **Spell reorder feedback** — Shift+Up/Down in the character sheet now announces which spell you moved past: "Moved above Fireball" or "Moved below Icicle".
+
+### Bug Fixes
+
+- **Poison blocks potion: now voiced (GH#13)** — Attempting to use a healing potion while poisoned now says "poisoned" instead of the generic "cannot cast".
+- **Level-complete turn stomp** — The post-victory turn signal no longer interrupts the level-complete stats readout.
+
 ## [0.2.2] - 2026-04-09
 
 ### Multi-Screen-Reader Support

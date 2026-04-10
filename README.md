@@ -1,6 +1,6 @@
 # Words of Power
 
-**Version 0.2.2**
+**Version 0.2.3**
 
 An accessibility mod for Rift Wizard 2 that provides full speech output through NVDA, JAWS, and other screen readers.
 
@@ -26,7 +26,7 @@ Click the link above, then download the `.zip` file listed under Assets.
 1. Your screen reader must be running before you launch the game.
 2. Extract the downloaded zip. Copy the `screen_reader` folder into `RiftWizard2/mods/` so the path looks like `RiftWizard2/mods/screen_reader/screen_reader.py`. (Create the `mods` folder if it doesn't exist.)
 3. Make sure `Tolk.dll` is in the `screen_reader` folder alongside `screen_reader.py`. If Tolk.dll is not present, the mod falls back to direct NVDA support only.
-4. Launch the game normally. You'll hear "Words of Power version 0.2.2" if it's working.
+4. Launch the game normally. You'll hear "Words of Power version 0.2.3" if it's working.
 5. Debug log writes to `screen_reader_debug.log` in the mod folder.
 
 ## How It Works
@@ -56,6 +56,8 @@ The mod tracks resources so you don't have to count. Spell charges announce at h
 ## Keybinds
 
 The game's own controls are unchanged. Press H in-game for its native help screen. Press Shift+/ (?) for the full mod keybind reference. Everything below is added by the mod.
+
+> **Note:** On first launch, the mod rebinds tooltip cycling from PgUp/PgDn to **Backslash** (previous) and **Backspace** (next) for screen reader compatibility. PgUp/PgDn are kept as secondary bindings. Fast Forward is unbound to free Backspace. You can change any of these in Options > Key Rebind.
 
 ### Scans
 

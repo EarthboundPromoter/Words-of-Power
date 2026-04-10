@@ -1,5 +1,5 @@
 # Rift Wizard 2 Screen Reader Mod — Words of Power
-MOD_VERSION = "0.2.2"
+MOD_VERSION = "0.2.3"
 
 import sys
 import os
@@ -1631,14 +1631,38 @@ def on_item_pickup(event):
         log(f"[Item] Error: {e}")
 
 def on_level_complete(event):
-    """Announce level completion and reroll grant."""
+    """Announce level completion with reroll grant and stats summary."""
+    import re as _re_lc
     try:
         _level_complete[0] = True
         game = _game_ref[0]
         rerolls = getattr(game, 'rift_rerolls', 0) if game else 0
-        text = f"Level complete. {rerolls} reroll" if rerolls else "Level complete"
-        log(f"[Level] {_log_ctx()} {text}")
-        batcher.speak_immediate(text)
+        header = f"Level complete. {rerolls} reroll" if rerolls else "Level complete"
+
+        # Read stats file for level summary (written by finalize_level before this event)
+        chunks = [header]
+        try:
+            if game:
+                stats_path = os.path.join('saves', str(game.run_number),
+                                          'stats.level_%d.txt' % game.level_num)
+                if os.path.exists(stats_path):
+                    with open(stats_path, 'r') as f:
+                        content = f.read().strip()
+                    if content:
+                        sections = _re_lc.split(r'\n\s*\n', content)
+                        # Skip first section (Realm/Outcome — already in header)
+                        for section in sections[1:]:
+                            collapsed = ' '.join(l.strip() for l in section.split('\n') if l.strip())
+                            if collapsed:
+                                chunks.append(collapsed)
+        except Exception:
+            pass  # Stats file missing or unreadable — header alone is fine
+
+        if len(chunks) > 1:
+            async_tts.speak_batched(chunks)
+        else:
+            batcher.speak_immediate(header)
+        log(f"[Level] {_log_ctx()} {header} ({len(chunks)} chunks)")
     except Exception as e:
         log(f"[Level] Error: {e}")
 
@@ -2122,6 +2146,12 @@ def _get_cast_failure_reason(spell, x, y):
                 return "no line of sight"
     except:
         pass
+    # Poison blocks healing potion use (GH#13)
+    try:
+        if any(getattr(b, 'name', '') == 'Poison' for b in getattr(caster, 'buffs', [])):
+            return "poisoned"
+    except Exception:
+        pass
     return "cannot cast"
 
 # ============================================================================
@@ -2145,6 +2175,52 @@ if _PyGameView is None:
         if _PyGameView is not None:
             break
 
+# ============================================================================
+# KEYBIND MIGRATION: Screen-Reader-Friendly Defaults
+# ============================================================================
+# PgUp/PgDn conflict with NVDA's numpad passthrough. On first load, rebind
+# tooltip cycling to Backslash (prev) / Backspace (next) and disable Fast
+# Forward (was Backspace). PgUp/PgDn kept as secondary bindings for sighted
+# users. Players can rebind via the in-game rebind screen at any time.
+# ============================================================================
+
+import pygame as _pg_keybind
+_keybinds_migrated = _settings.getboolean('words_of_power', 'keybinds_migrated', fallback=False)
+
+if _main is not None:
+    _default_kb = getattr(_main, 'default_key_binds', None)
+    _KB_PREV = getattr(_main, 'KEY_BIND_PREV_EXAMINE_TARGET', None)
+    _KB_NEXT = getattr(_main, 'KEY_BIND_NEXT_EXAMINE_TARGET', None)
+    _KB_FF = getattr(_main, 'KEY_BIND_FF', None)
+
+    if _default_kb is not None and _KB_PREV is not None:
+        # Always set screen-reader-friendly defaults (affects fresh installs
+        # and any new PyGameView instances).
+        _default_kb[_KB_PREV] = [_pg_keybind.K_BACKSLASH, _pg_keybind.K_PAGEUP]
+        _default_kb[_KB_NEXT] = [_pg_keybind.K_BACKSPACE, _pg_keybind.K_PAGEDOWN]
+        if _KB_FF is not None:
+            _default_kb[_KB_FF] = [None, None]  # Backspace repurposed for tooltip cycling
+        log("[Keybinds] Patched default_key_binds: tooltip prev=Backslash, next=Backspace, FF=unbound")
+
+if not _keybinds_migrated:
+    # First load — will also patch the live instance and announce.
+    # Write the flag so subsequent loads don't repeat.
+    if not _settings.has_section('words_of_power'):
+        _settings.add_section('words_of_power')
+    _settings.set('words_of_power', 'keybinds_migrated', 'true')
+    try:
+        with open(_settings_path, 'w', encoding='utf-8') as _f:
+            _settings.write(_f)
+        log("[Keybinds] Migration flag saved to settings.ini")
+    except Exception as _e:
+        log(f"[Keybinds] Could not save settings.ini: {_e}")
+
+# Flag checked later in patched_process_level_input to patch the live instance
+# and speak the one-time announcement.
+_keybinds_instance_patched = [False]
+
+# ============================================================================
+
 if _PyGameView is not None:
     # Startup guard: verify all methods we patch still exist
     _expected_methods = [
@@ -2155,6 +2231,7 @@ if _PyGameView is not None:
         'open_char_sheet', 'adjust_char_sheet_selection',
         'toggle_char_sheet_selection_type',
         'process_level_input', 'try_move', 'deploy',
+        'move_examine_target', 'adjust_spell_pos',
     ]
     for _method_name in _expected_methods:
         if not hasattr(_PyGameView, _method_name):
@@ -3019,6 +3096,113 @@ if _PyGameView is not None:
     _PyGameView.toggle_char_sheet_selection_type = patched_toggle_char_sheet_selection_type
     _PyGameView.process_char_sheet_input = patched_process_char_sheet_input
     log("  Character sheet hooks installed")
+
+    # ---- PgUp/PgDn Tooltip Cycling Hook ----
+    # The game's examine panel supports extra tooltips (spell upgrades, summoned
+    # units, equipment details) accessed via PgUp/PgDn (move_examine_target).
+    # Without this hook, cycling through extras is completely silent.
+
+    _original_move_examine_target = _PyGameView.move_examine_target
+
+    def _describe_examine_tooltip(view):
+        """Describe the current examine_target for PgUp/PgDn tooltip cycling.
+        Handles units (summoned creatures), spells, upgrades, and equipment."""
+        target = view.examine_target
+        if target is None:
+            return None
+        # Page counter: "2 of 5"
+        num_extras = len(view._examine_extras)
+        idx = view._examine_index
+        counter = f"{idx + 1} of {num_extras + 1}"
+        # Unit (summoned creature stat block)
+        if isinstance(target, Level.Unit):
+            return f"{counter}. {_describe_unit(target)}"
+        # Spell (full spell description)
+        if isinstance(target, Level.Spell):
+            return f"{counter}. {_describe_spell(target)}"
+        # Upgrade (spell upgrade with prereq)
+        if isinstance(target, Level.Upgrade):
+            name = _name(target)
+            prereq = getattr(target, 'prereq', None)
+            parts = []
+            if prereq:
+                parts.append(f"Upgrade: {name} for {_name(prereq)}")
+            else:
+                parts.append(f"Skill: {name}")
+            lvl = getattr(target, 'level', 0)
+            if lvl:
+                parts.append(f"Level {lvl}")
+            desc = ''
+            try:
+                desc = target.get_description() or ''
+            except Exception:
+                desc = getattr(target, 'description', '') or ''
+            if desc:
+                parts.append(_clean_desc(desc))
+            return f"{counter}. " + ". ".join(parts)
+        # Equipment
+        if isinstance(target, Level.Equipment):
+            name = _name(target)
+            slot = _SLOT_NAMES.get(getattr(target, 'slot', -1), "Equipment")
+            parts = [f"{slot}: {name}"]
+            desc = ''
+            try:
+                desc = target.get_description() or ''
+            except Exception:
+                desc = getattr(target, 'description', '') or ''
+            if desc:
+                parts.append(_clean_desc(desc))
+            return f"{counter}. " + ". ".join(parts)
+        # Fallback
+        return f"{counter}. {_name(target)}"
+
+    def patched_move_examine_target(self, movedir):
+        """Voice tooltip content when PgUp/PgDn cycles through extra examine targets."""
+        prev_index = self._examine_index
+        _original_move_examine_target(self, movedir)
+        if self._examine_index == prev_index:
+            return  # Didn't actually change (at boundary)
+        try:
+            text = _describe_examine_tooltip(self)
+            if text:
+                async_tts.speak(text)
+                log(f"[Tooltip] PgDn: {text[:80]}")
+        except Exception as e:
+            log(f"[Tooltip] Error: {e}")
+
+    _PyGameView.move_examine_target = patched_move_examine_target
+    log("  PgUp/PgDn tooltip cycling hook installed")
+
+    # ---- Spell Reorder Hook (Shift+Up/Down in Character Sheet) ----
+
+    _original_adjust_spell_pos = _PyGameView.adjust_spell_pos
+
+    def patched_adjust_spell_pos(self, amt):
+        """Voice confirmation when spell position is changed in character sheet.
+        Reports the spell that was displaced: 'Moved above X' or 'Moved below X'."""
+        target = self.examine_target
+        spells = self.game.p1.spells if self.game else []
+        old_index = spells.index(target) if target in spells else -1
+        _original_adjust_spell_pos(self, amt)
+        new_index = spells.index(target) if target in spells else -1
+        if new_index == old_index or new_index < 0:
+            return  # Didn't move (at boundary or not a spell)
+        try:
+            # The displaced spell is now at our old position
+            displaced = spells[old_index] if 0 <= old_index < len(spells) else None
+            if displaced and amt < 0:
+                text = f"Moved above {_name(displaced)}"
+            elif displaced and amt > 0:
+                text = f"Moved below {_name(displaced)}"
+            else:
+                text = "Moved"
+            async_tts.speak(text)
+            log(f"[CharSheet] Reorder: {_name(target)} {text}")
+        except Exception as e:
+            log(f"[CharSheet] Reorder error: {e}")
+
+    _PyGameView.adjust_spell_pos = patched_adjust_spell_pos
+    log("  Spell reorder feedback hook installed")
 
     # ---- Target Selection Hooks ----
 
@@ -5049,6 +5233,19 @@ if _PyGameView is not None:
         """Intercept mod hotkeys before normal input processing.
         Also detects deploy phase start/abort transitions, turn boundaries,
         gameover/victory voicing, and drives the speech batching flush cycle."""
+
+        # First-load keybind migration: patch the live instance's key_binds
+        # so saved user options (which may contain old PgUp/PgDn) get overridden.
+        # Only on first load — subsequent loads respect user customization.
+        if not _keybinds_instance_patched[0]:
+            _keybinds_instance_patched[0] = True
+            if not _keybinds_migrated and _KB_PREV is not None and _KB_NEXT is not None:
+                self.key_binds[_KB_PREV] = [_pg_keybind.K_BACKSLASH, _pg_keybind.K_PAGEUP]
+                self.key_binds[_KB_NEXT] = [_pg_keybind.K_BACKSPACE, _pg_keybind.K_PAGEDOWN]
+                if _KB_FF is not None:
+                    self.key_binds[_KB_FF] = [None, None]
+                log("[Keybinds] First-load: patched live instance key_binds")
+
         deploying = getattr(self.game, 'deploying', False)
         _game_ref[0] = self.game
 
@@ -5066,8 +5263,9 @@ if _PyGameView is not None:
             return
 
         # Turn signal: detect is_awaiting_input False→True transition
-        # Suppress during autowalk (#24) and debounce rapid enemy-pass sequences (#32)
-        if not deploying:
+        # Suppress during autowalk (#24), debounce rapid enemy-pass sequences (#32),
+        # and suppress after level complete (victory turn would stomp stats speech).
+        if not deploying and not _level_complete[0]:
             awaiting = getattr(self.game.cur_level, 'is_awaiting_input', False)
             if awaiting and not _turn_announced[0]:
                 _turn_announced[0] = True
@@ -5738,8 +5936,21 @@ if _PyGameView is not None:
     def _patched_process_title(self):
         if not _sr_title_entered[0]:
             _sr_title_entered[0] = True
-            async_tts.speak("Rift Wizard 2")
-            log("[State] TITLE entered")
+            # Suppress the deferred keybind help — we'll include it inline
+            _pending_keybinds[0] = None
+            if not _keybinds_migrated:
+                async_tts.speak(
+                    "Rift Wizard 2. "
+                    "Note: Words of Power has rebound tooltip cycling to "
+                    "Backslash and Backspace for screen reader compatibility. "
+                    "Fast Forward has been unbound. "
+                    "You can rebind these in Options. "
+                    "Up and down to navigate. Return to select."
+                )
+                log("[State] TITLE entered + keybind migration announcement")
+            else:
+                async_tts.speak("Rift Wizard 2. Up and down to navigate. Return to select.")
+                log("[State] TITLE entered")
 
         prev_sel = self.examine_target
         _orig_process_title(self)
