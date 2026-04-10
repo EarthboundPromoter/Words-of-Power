@@ -26,5 +26,8 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# Drafts
+discord_announcement*
+
 # Backups
 *.bak
