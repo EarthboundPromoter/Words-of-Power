@@ -20,6 +20,10 @@ tests/
 # IDE / editor
 .claude/
 .vscode/
+*.code-workspace
+
+# User settings (generated on first run)
+settings.ini
 
 # OS
 Thumbs.db
