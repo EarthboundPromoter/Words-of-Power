@@ -2,6 +2,10 @@
 logs/
 *.log
 
+# Telemetry (dev-only, author's machine; not shipped to players)
+telemetry/
+telemetry_enabled
+
 # Binary dependencies (users provide their own NVDA DLL)
 *.dll
 

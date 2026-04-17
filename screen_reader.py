@@ -18,7 +18,7 @@ if game_dir not in sys.path:
 # Add mod directory to path (for helpers.py imports)
 if mod_dir not in sys.path:
     sys.path.insert(0, mod_dir)
-                                
+
 # Set up logging to file — archive previous log before overwriting
 log_file_path = os.path.join(mod_dir, "screen_reader_debug.log")
 log_archive_dir = os.path.join(mod_dir, "logs")
@@ -33,6 +33,12 @@ if os.path.exists(log_file_path) and os.path.getsize(log_file_path) > 0:
         pass  # If rename fails (e.g. duplicate), just overwrite
 log_file = open(log_file_path, 'w', encoding='utf-8')
 
+try:
+    from . import telemetry as _telemetry  # type: ignore
+except Exception:
+    import telemetry as _telemetry  # type: ignore
+
+
 def log(message):
     """Write to both console and log file."""
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -40,6 +46,10 @@ def log(message):
     print(full_message)
     log_file.write(full_message + "\n")
     log_file.flush()
+    try:
+        _telemetry.capture(full_message)
+    except Exception:
+        pass
 
 log("=" * 60)
 log(f"Words of Power v{MOD_VERSION}")
@@ -122,7 +132,7 @@ class _TolkTTS:
             # SetDllDirectoryW adds to the Windows LoadLibrary search path
             # so Tolk can find screen reader driver DLLs in the mod folder.
             ctypes.windll.kernel32.SetDllDirectoryW(mod_dir)
-            log(f"[Tolk] Set DLL search directory to mod dir")
+            log("[Tolk] Set DLL search directory to mod dir")
 
             # Enable SAPI as last-resort fallback (not preferred over
             # real screen readers), then initialize
@@ -240,7 +250,6 @@ log("Level lifecycle hook base captured")
 log("[Init] Event triggers...")
 
 import threading
-import math
 import time
 from collections import deque
 
@@ -686,9 +695,9 @@ def are_adjacent(a, b):
 
 # Direction & spatial helpers — extracted to helpers.py for independent testing
 from helpers import (_cardinal_direction, _bearing_index, _direction_offset, _pluralize,
-                     _ray_length, _RAYCAST_DIRS, _count_exits, _check_corridor_end,
+                     _ray_length, _RAYCAST_DIRS,
                      _classify_terrain, _TERRAIN_LABELS, _scan_corridor_branches,
-                     _quadrant_label, _number_deploy_dupes, _DEPLOY_CENTER)
+                     _quadrant_label, _number_deploy_dupes)
 
 # ---- Pathfinding Via Hints ----
 _VIA_HINT_CAP = 3  # Max blocked entries per scan that get pathfinding computation
@@ -790,7 +799,7 @@ def _via_hint(level, ref_point, target_point, player):
 # ---- Deploy Navigation Helpers ----
 # Quadrant overview + category cycling for deploy phase (Session 49, Bug #38).
 
-# _DEPLOY_CENTER, _quadrant_label imported from helpers.py
+# _quadrant_label imported from helpers.py
 
 def _deploy_get_orbs(level):
     """Memory Orbs on level. Returns [(prop, x, y), ...]."""
@@ -900,7 +909,7 @@ def _compute_event_metadata(unit):
         distance = max(abs(dx), abs(dy))
         return {'los': los, 'direction': direction, 'cardinal': cardinal,
                 'distance': distance, 'target_x': tx, 'target_y': ty}
-    except:
+    except Exception:
         return {'los': True, 'direction': 'nearby', 'cardinal': '',
                 'distance': 0, 'target_x': 0, 'target_y': 0}
 
@@ -929,7 +938,7 @@ def _log_ctx():
         if game and game.p1:
             return f"T{t} @({game.p1.x},{game.p1.y})"
         return f"T{t}"
-    except:
+    except Exception:
         return ""
 
 # ---- Charge Warning System ----
@@ -946,7 +955,7 @@ def _get_charge_info(spell):
     cur = getattr(spell, 'cur_charges', max_charges)
     try:
         stat_max = spell.get_stat('max_charges') if hasattr(spell, 'get_stat') else max_charges
-    except:
+    except Exception:
         stat_max = max_charges
     return cur, stat_max
 
@@ -1116,6 +1125,13 @@ def on_spell_cast(event):
         text = f"Cast {_name(event.spell)}"
         log(f"[Cast] {_log_ctx()} {text}")
         batcher.speak_immediate(text)
+        try:
+            _telemetry.emit('cast_target',
+                            spell=_name(event.spell),
+                            tx=getattr(event, 'x', None),
+                            ty=getattr(event, 'y', None))
+        except Exception:
+            pass
 
         # Check charge thresholds after cast — delayed so it queues after
         # damage/death/heal events from this cast resolve first
@@ -1162,6 +1178,16 @@ def on_damaged(event):
             log(f"[Damage IN] {_log_ctx()} {text}")
             batcher.speak_immediate(text)
             _schedule_hp_announcement(unit)
+            try:
+                _so = getattr(event.source, 'owner', None)
+                _telemetry.emit('damage_in_detail',
+                                source=caster or spell_name or "unknown",
+                                spell=spell_name,
+                                dmg=dmg, dtype=dtype,
+                                sx=getattr(_so, 'x', None) if _so else None,
+                                sy=getattr(_so, 'y', None) if _so else None)
+            except Exception:
+                pass
         elif _is_player(getattr(event.source, 'owner', None)):
             # Player/ally deals damage: "Icicle: Goblin, 6 Physical"
             resist_tag = ""
@@ -1178,6 +1204,17 @@ def on_damaged(event):
             text = f"{spell_name}: {_name(unit)}{coord_tag}, {dmg} {dtype}{resist_tag}{soul_tag}"
             log(f"[Damage OUT] {_log_ctx()} {text}")
             batcher.speak_queued(text)
+            try:
+                _telemetry.emit('damage_out_detail',
+                                spell=spell_name,
+                                target=_name(unit),
+                                tx=getattr(unit, 'x', None),
+                                ty=getattr(unit, 'y', None),
+                                hp_after=getattr(unit, 'cur_hp', None),
+                                dmg=dmg, dtype=dtype,
+                                resisted=bool(resist_tag))
+            except Exception:
+                pass
         else:
             # Non-player damage: enemy hits ally, enemy hits enemy, etc.
             # Skip buff/status ticks on non-player units (predictable, noisy)
@@ -1371,7 +1408,8 @@ def on_item_pickup(event):
     """Announce item pickups. For Memory Orbs, also announce new SP total."""
     try:
         item_name = _name(event.item)
-        desc = (event.item.get_description() or '') if hasattr(event.item, 'get_description') else getattr(event.item, 'description', '')
+        desc = ((event.item.get_description() or '') if hasattr(event.item, 'get_description')
+                else getattr(event.item, 'description', ''))
         text = f"Picked up {item_name}"
         if desc and desc != "Undescribed Item":
             text += f". {desc}"
@@ -1418,6 +1456,18 @@ def on_level_complete(event):
         else:
             batcher.speak_immediate(header)
         log(f"[Level] {_log_ctx()} {header} ({len(chunks)} chunks)")
+        try:
+            if game:
+                _telemetry.emit('realm_complete',
+                                realm=getattr(game, 'level_num', None),
+                                total_turns=getattr(game, 'total_turns', None),
+                                rerolls_remaining=rerolls,
+                                stats_path=f"saves/{getattr(game,'run_number',None)}/"
+                                           f"stats.level_{getattr(game,'level_num',None)}.txt",
+                                finish_screenshot=f"saves/{getattr(game,'run_number',None)}/"
+                                                  f"level_{getattr(game,'level_num',None)}_finish.png")
+        except Exception:
+            pass
     except Exception as e:
         log(f"[Level] Error: {e}")
 
@@ -1708,9 +1758,11 @@ def register_triggers(event_manager):
     # Check the correct attribute: EventHandler._handlers[event_type][None] for global triggers
     existing = list(event_manager._handlers[Level.EventOnSpellCast][None])
     if on_spell_cast in existing:
-        log(f"[Screen Reader] Triggers already present on EventManager {id(event_manager)}, skipping (had {len(existing)} SpellCast triggers)")
+        log(f"[Screen Reader] Triggers already present on EventManager {id(event_manager)}, "
+            f"skipping (had {len(existing)} SpellCast triggers)")
         return
-    log(f"[Screen Reader] Registering triggers on EventManager {id(event_manager)} (had {len(existing)} SpellCast triggers)")
+    log(f"[Screen Reader] Registering triggers on EventManager {id(event_manager)} "
+        f"(had {len(existing)} SpellCast triggers)")
     event_manager.register_global_trigger(Level.EventOnSpellCast, on_spell_cast)
     event_manager.register_global_trigger(Level.EventOnDamaged, on_damaged)
     event_manager.register_global_trigger(Level.EventOnDeath, on_death)
@@ -1728,7 +1780,8 @@ def register_triggers(event_manager):
     event_manager.register_global_trigger(Level.EventOnUnitAdded, _on_unit_added_souljar)
     # Buff-based spawn announcement (S65 — boss minions, etc.)
     event_manager.register_global_trigger(Level.EventOnUnitAdded, _on_unit_added_spawn)
-    log("[Screen Reader] Triggers registered: SpellCast, Damaged, Death, Healed, BuffApply, BuffRemove, ItemPickup, LevelComplete, ShieldRemoved, Moved, UnitAdded (adjacency+souljar+spawn)")
+    log("[Screen Reader] Triggers registered: SpellCast, Damaged, Death, Healed, BuffApply, "
+        "BuffRemove, ItemPickup, LevelComplete, ShieldRemoved, Moved, UnitAdded (adjacency+souljar+spawn)")
 
 # Update lifecycle hook to register triggers on every level transition
 def patched_setup_logging_v2(self, logdir, level_num):
@@ -1861,7 +1914,7 @@ def _get_cost_failure_reason(spell):
         hp_cost = spell.get_stat('hp_cost') if hasattr(spell, 'get_stat') else 0
         if hp_cost and hp_cost >= caster.cur_hp:
             return "not enough HP"
-    except:
+    except Exception:
         pass
     return "cannot cast"
 
@@ -1882,7 +1935,7 @@ def _get_cast_failure_reason(spell, x, y):
     melee = getattr(spell, 'melee', False)
     try:
         r = spell.get_stat('range') + (getattr(caster, 'radius', 0) if melee else 0)
-    except:
+    except Exception:
         r = getattr(spell, 'range', 0)
     if melee:
         if max(dx, dy) > (1 + getattr(caster, 'radius', 0)):
@@ -1899,7 +1952,7 @@ def _get_cast_failure_reason(spell, x, y):
         if spell.get_stat('requires_los'):
             if not level.can_see(caster.x, caster.y, x, y, light_walls=getattr(spell, 'cast_on_walls', False)):
                 return "no line of sight"
-    except:
+    except Exception:
         pass
     # Poison blocks healing potion use (GH#13)
     try:
@@ -2045,7 +2098,7 @@ if _PyGameView is not None:
             else:
                 try:
                     rng = spell.get_stat('range') if hasattr(spell, 'get_stat') else getattr(spell, 'range', 0)
-                except:
+                except Exception:
                     rng = getattr(spell, 'range', 0)
                 if rng:
                     range_text = f"Range {rng}"
@@ -2053,7 +2106,7 @@ if _PyGameView is not None:
             aoe_text = ""
             try:
                 radius = spell.get_stat('radius') if hasattr(spell, 'get_stat') else getattr(spell, 'radius', 0)
-            except:
+            except Exception:
                 radius = getattr(spell, 'radius', 0)
             if radius and radius > 0:
                 aoe_text = f"{radius} radius"
@@ -2063,7 +2116,7 @@ if _PyGameView is not None:
                 if hasattr(spell, 'get_description'):
                     try:
                         raw_desc = (spell.get_description() or "").lower()
-                    except:
+                    except Exception:
                         pass
                 if 'beam' in raw_desc or 'line' in raw_desc:
                     aoe_text = "beam"
@@ -2119,7 +2172,7 @@ if _PyGameView is not None:
                 if not spell.can_cast(target.x, target.y):
                     will_fail = True
                     reason = _get_cast_failure_reason(spell, target.x, target.y)
-            except:
+            except Exception:
                 pass
         _original_cast_cur_spell(self)
         if will_fail and reason:
@@ -2160,7 +2213,7 @@ if _PyGameView is not None:
         for spell_class, bonuses in getattr(obj, 'spell_bonuses_pct', {}).items():
             try:
                 spell_n = spell_class().name
-            except:
+            except Exception:
                 spell_n = str(spell_class)
             for attr, val in bonuses.items():
                 if val:
@@ -2168,7 +2221,7 @@ if _PyGameView is not None:
         for spell_class, bonuses in getattr(obj, 'spell_bonuses', {}).items():
             try:
                 spell_n = spell_class().name
-            except:
+            except Exception:
                 spell_n = str(spell_class)
             for attr, val in bonuses.items():
                 if val:
@@ -2217,7 +2270,7 @@ if _PyGameView is not None:
         if hasattr(spell, 'get_stat'):
             try:
                 radius = spell.get_stat('radius')
-            except:
+            except Exception:
                 radius = getattr(spell, 'radius', 0)
         else:
             radius = getattr(spell, 'radius', 0)
@@ -2246,7 +2299,7 @@ if _PyGameView is not None:
             if hasattr(spell, 'get_stat'):
                 try:
                     rng = spell.get_stat('range')
-                except:
+                except Exception:
                     rng = getattr(spell, 'range', 0)
             else:
                 rng = getattr(spell, 'range', 0)
@@ -2280,7 +2333,7 @@ if _PyGameView is not None:
         try:
             if hasattr(spell, 'get_stat') and spell.get_stat('quick_cast'):
                 parts.append("Quick cast")
-        except:
+        except Exception:
             pass
 
         # Charges
@@ -2289,7 +2342,7 @@ if _PyGameView is not None:
             cur = getattr(spell, 'cur_charges', max_charges)
             try:
                 stat_max = spell.get_stat('max_charges') if hasattr(spell, 'get_stat') else max_charges
-            except:
+            except Exception:
                 stat_max = max_charges
             parts.append(f"Charges {cur} of {stat_max}")
 
@@ -2299,7 +2352,7 @@ if _PyGameView is not None:
                 hp_cost = spell.get_stat('hp_cost')
                 if hp_cost:
                     parts.append(f"HP cost {hp_cost}")
-            except:
+            except Exception:
                 pass
 
         # Equipment/buff bonus dictionaries
@@ -2323,7 +2376,7 @@ if _PyGameView is not None:
             if hasattr(spell, 'get_stat'):
                 try:
                     val = spell.get_stat(attr)
-                except:
+                except Exception:
                     val = getattr(spell, attr, None)
             if val:
                 attr_label = ' '.join(w.capitalize() for w in attr.replace('_', ' ').split())
@@ -2381,7 +2434,7 @@ if _PyGameView is not None:
                     return "Locked, 1 upgrade per spell"
             suffix = "" if affordable else ", cannot afford"
             return f"Cost {cost} SP{suffix}"
-        except:
+        except Exception:
             return ""
 
     _last_shop_target = [None]
@@ -2454,7 +2507,8 @@ if _PyGameView is not None:
 
             elif shop_type == _SHOP_TYPE_SPELL_UPGRADES:
                 # Spell upgrade picker: "Upgrade [SpellName], N SP available"
-                spell_name = _name(getattr(self, 'shop_upgrade_spell', None)) if hasattr(self, 'shop_upgrade_spell') else "Spell"
+                spell_name = (_name(getattr(self, 'shop_upgrade_spell', None))
+                              if hasattr(self, 'shop_upgrade_spell') else "Spell")
                 sp_total = getattr(game.p1, 'xp', 0) if game and game.p1 else 0
                 header = f"Upgrade {spell_name}, {sp_total} SP available"
                 if target is not None:
@@ -2496,6 +2550,17 @@ if _PyGameView is not None:
 
             async_tts.speak(text)
             log(f"[Shop] Opened: {text}")
+            try:
+                _sp = getattr(game.p1, 'xp', None) if game and game.p1 else None
+                _shop_type_name = {
+                    _SHOP_TYPE_BESTIARY: 'bestiary',
+                    _SHOP_TYPE_SPELL_UPGRADES: 'spell_upgrades',
+                    _SHOP_TYPE_SHOP: 'level_shop',
+                    _SHOP_TYPE_UPGRADES: 'learn_skill',
+                }.get(shop_type, 'learn_spell')
+                _telemetry.emit('shop_open', shop_type=_shop_type_name, sp=_sp)
+            except Exception:
+                pass
         except Exception as e:
             log(f"[Shop] Error: {e}")
 
@@ -2549,9 +2614,25 @@ if _PyGameView is not None:
                 cost = ""
                 try:
                     cost = f" ({self.game.get_upgrade_cost(purchased)} SP)"
-                except:
+                except Exception:
                     pass
                 log(f"[Shop] {text}{cost}")
+                try:
+                    _sp_after = getattr(self.game.p1, 'xp', None) if self.game and self.game.p1 else None
+                    _cost_val = None
+                    try:
+                        _cost_val = self.game.get_upgrade_cost(purchased)
+                    except Exception:
+                        pass
+                    _telemetry.emit('shop_buy',
+                                    item=purchase_name,
+                                    kind=('equipment' if isinstance(purchased, Level.Equipment)
+                                          else 'spell' if isinstance(purchased, Level.Spell)
+                                          else 'other'),
+                                    cost=_cost_val,
+                                    sp_after=_sp_after)
+                except Exception:
+                    pass
                 # Speak char sheet overview after purchase
                 try:
                     _speak_char_sheet_overview(self)
@@ -2702,7 +2783,7 @@ if _PyGameView is not None:
             desc = ''
             try:
                 desc = target.get_description() or ''
-            except:
+            except Exception:
                 desc = getattr(target, 'description', '') or ''
             if desc:
                 parts.append(_clean_desc(desc))
@@ -2724,7 +2805,7 @@ if _PyGameView is not None:
                 desc = ''
                 try:
                     desc = target.get_description() or ''
-                except:
+                except Exception:
                     desc = getattr(target, 'description', '') or ''
                 if desc:
                     parts.append(_clean_desc(desc))
@@ -2741,7 +2822,7 @@ if _PyGameView is not None:
                 desc = ''
                 try:
                     desc = target.get_description() or ''
-                except:
+                except Exception:
                     desc = getattr(target, 'description', '') or ''
                 if desc:
                     parts.append(_clean_desc(desc))
@@ -3087,13 +3168,13 @@ if _PyGameView is not None:
             try:
                 unit = gen_params.primary_spawn()
                 enemies.append(unit.name)
-            except:
+            except Exception:
                 pass
         if getattr(gen_params, 'secondary_spawn', None) and gen_params.secondary_spawn != gen_params.primary_spawn:
             try:
                 unit = gen_params.secondary_spawn()
                 enemies.append(unit.name)
-            except:
+            except Exception:
                 pass
 
         drawn_bosses = set()
@@ -3133,7 +3214,6 @@ if _PyGameView is not None:
 
     def _describe_unit(unit):
         """Build a comprehensive spoken description of a unit, matching the visual examine panel."""
-        import re
         parts = []
 
         # Name + Friendly status
@@ -3223,7 +3303,7 @@ if _PyGameView is not None:
                             cd = spell.get_stat('cool_down')
                     else:
                         cd = getattr(spell, 'cool_down', 0)
-                except:
+                except Exception:
                     cd = getattr(spell, 'cool_down', 0)
 
                 if cd > 0:
@@ -3444,7 +3524,7 @@ if _PyGameView is not None:
             # Determine if this spell is truly AoE
             try:
                 radius = spell.get_stat('radius') if hasattr(spell, 'get_stat') else getattr(spell, 'radius', 0)
-            except:
+            except Exception:
                 radius = getattr(spell, 'radius', 0)
             is_aoe = radius and radius > 0
             if not is_aoe:
@@ -3453,7 +3533,7 @@ if _PyGameView is not None:
                 if hasattr(spell, 'get_description'):
                     try:
                         desc = spell.get_description().lower()
-                    except:
+                    except Exception:
                         pass
                 elif hasattr(spell, 'description'):
                     desc = (spell.description or "").lower()
@@ -3503,7 +3583,7 @@ if _PyGameView is not None:
                 melee = getattr(spell, 'melee', False)
                 try:
                     r = spell.get_stat('range') + (getattr(caster, 'radius', 0) if melee else 0)
-                except:
+                except Exception:
                     r = getattr(spell, 'range', 0)
                 if melee:
                     if max(dx, dy) > (1 + getattr(caster, 'radius', 0)):
@@ -3586,12 +3666,21 @@ if _PyGameView is not None:
                 chunks = _describe_portal_chunks(tile.prop, view)
                 if cfg.show_coordinates:
                     chunks[0] = f"{chunks[0]} ({point.x},{point.y})"
+                try:
+                    _telemetry.emit('look', cx=point.x, cy=point.y, portal=True,
+                                    msg=chunks[0] if chunks else "")
+                except Exception:
+                    pass
                 log(f"[Look] ({point.x},{point.y}) portal: {len(chunks)} chunks")
                 async_tts.speak_batched(chunks)
             else:
                 text = _describe_tile(view, point)
                 if cfg.show_coordinates:
                     text = f"{text} ({point.x},{point.y})"
+                try:
+                    _telemetry.emit('look', cx=point.x, cy=point.y, msg=text)
+                except Exception:
+                    pass
                 log(f"[Look] ({point.x},{point.y}) {text}")
                 async_tts.speak(text)
         except Exception as e:
@@ -3610,6 +3699,11 @@ if _PyGameView is not None:
                 tile_text = f"{tile_text} ({point.x},{point.y})"
             range_warn, aoe_info = _check_aoe_warning(view)
             text = f"{range_warn}{aoe_info} {tile_text}".strip() if (range_warn or aoe_info) else tile_text
+            try:
+                _telemetry.emit('target_tile', cx=point.x, cy=point.y,
+                                spell=_name(spell), msg=text)
+            except Exception:
+                pass
             log(f"[Target Tile] {text}")
             async_tts.speak(text)
         except Exception as e:
@@ -3654,6 +3748,10 @@ if _PyGameView is not None:
             if cfg.show_coordinates:
                 text = f"{text} ({x},{y})"
 
+            try:
+                _telemetry.emit('deploy_tile', cx=x, cy=y, msg=text)
+            except Exception:
+                pass
             log(f"[Deploy] {text}")
             async_tts.speak(text)
         except Exception as e:
@@ -3690,7 +3788,6 @@ if _PyGameView is not None:
     # them through to the original method is safe — they'll be ignored.
 
     import pygame
-    import math
 
     _original_process_level_input = _PyGameView.process_level_input
 
@@ -3843,7 +3940,7 @@ if _PyGameView is not None:
             _last_scanned_target[0] = unit
             try:
                 visible = level.can_see(ref_point.x, ref_point.y, unit.x, unit.y)
-            except:
+            except Exception:
                 visible = True
             los_tag = "" if visible else ", blocked"
             dx = unit.x - ref_point.x
@@ -3866,6 +3963,16 @@ if _PyGameView is not None:
             else:
                 text = f"{_qp}{entry}. {position}"
                 log(f"[Enemies] {_log_ctx()} {_qp}{log_entry}. {position}")
+            try:
+                _telemetry.emit('enemy_scan_detail',
+                                name=_name(unit),
+                                ex=unit.x, ey=unit.y,
+                                hp=getattr(unit, 'cur_hp', None),
+                                hp_max=getattr(unit, 'max_hp', None),
+                                visible=bool(visible),
+                                idx=idx + 1, total=total)
+            except Exception:
+                pass
 
             async_tts.speak(text)
         except Exception as e:
@@ -3913,7 +4020,7 @@ if _PyGameView is not None:
             _last_scanned_target[0] = unit
             try:
                 visible = level.can_see(ref_point.x, ref_point.y, unit.x, unit.y)
-            except:
+            except Exception:
                 visible = True
             los_tag = "" if visible else ", blocked"
             dx = unit.x - ref_point.x
@@ -3982,7 +4089,7 @@ if _PyGameView is not None:
             _last_scanned_target[0] = unit
             try:
                 visible = level.can_see(ref_point.x, ref_point.y, unit.x, unit.y)
-            except:
+            except Exception:
                 visible = True
             los_tag = "" if visible else ", blocked"
             dx = unit.x - ref_point.x
@@ -4145,7 +4252,7 @@ if _PyGameView is not None:
             # Build entry description
             try:
                 visible = level.can_see(ref_point.x, ref_point.y, tx, ty)
-            except:
+            except Exception:
                 visible = True
             los_tag = "" if visible else ", blocked"
             via_tag = ""
@@ -4283,7 +4390,7 @@ if _PyGameView is not None:
         desc = ''
         try:
             desc = cloud.get_description() or ''
-        except:
+        except Exception:
             desc = getattr(cloud, 'description', '') or ''
         if desc:
             parts.append(_clean_desc(desc))
@@ -4322,7 +4429,7 @@ if _PyGameView is not None:
             desc = ''
             try:
                 desc = item.get_description() or ''
-            except:
+            except Exception:
                 desc = getattr(item, 'description', '') or ''
             if desc:
                 parts.append(_clean_desc(desc))
@@ -4335,7 +4442,7 @@ if _PyGameView is not None:
         desc = ''
         try:
             desc = prop.get_description() or ''
-        except:
+        except Exception:
             desc = getattr(prop, 'description', '') or ''
         if desc:
             parts.append(_clean_desc(desc))
@@ -4422,14 +4529,14 @@ if _PyGameView is not None:
             try:
                 if spell.can_threaten(x, y):
                     return True
-            except:
+            except Exception:
                 pass
         for buff in getattr(unit, 'buffs', []):
             try:
                 if buff.can_threaten.__func__ != Level.Buff.can_threaten:
                     if buff.can_threaten(x, y):
                         return True
-            except:
+            except Exception:
                 pass
         return False
 
@@ -4451,14 +4558,13 @@ if _PyGameView is not None:
             _qp = f"From {qualifier}. " if qualifier else ""
 
             # Gather visible hostile units grouped by (name, direction)
-            from collections import Counter
             visible = []
             for unit in level.units:
                 if not Level.are_hostile(player, unit):
                     continue
                 try:
                     can_see = level.can_see(ref_point.x, ref_point.y, unit.x, unit.y)
-                except:
+                except Exception:
                     can_see = False
                 if can_see:
                     dx = unit.x - ref_point.x
@@ -4985,6 +5091,32 @@ if _PyGameView is not None:
         chunks.append("Press any key to continue.")
         async_tts.speak_batched(chunks)
         log(f"[Gameover] {label}: Realm {game.level_num}, {game.total_turns} turns ({len(chunks)} chunks)")
+        try:
+            _p = game.p1
+            _spells = []
+            if _p:
+                for _sp in getattr(_p, 'spells', []):
+                    _sn = getattr(_sp, 'name', None)
+                    if _sn:
+                        _spells.append(_sn)
+            _items = []
+            if _p:
+                for _it in getattr(_p, 'items', []):
+                    _in = getattr(_it, 'name', None)
+                    if _in:
+                        _items.append(_in)
+            _telemetry.emit('gameover',
+                            outcome='victory' if is_victory else 'defeat',
+                            realm=getattr(game, 'level_num', None),
+                            total_turns=getattr(game, 'total_turns', None),
+                            hp=getattr(_p, 'cur_hp', None) if _p else None,
+                            hp_max=getattr(_p, 'max_hp', None) if _p else None,
+                            sp=getattr(_p, 'xp', None) if _p else None,
+                            spells=_spells,
+                            items=_items,
+                            char_sheet=f"saves/{getattr(game,'run_number',None)}/char_sheet.png")
+        except Exception:
+            pass
 
     def _speak_mod_keybinds():
         """Speak all mod keybind reference. Triggered by Shift+/ (?) in level state."""
@@ -5013,7 +5145,7 @@ if _PyGameView is not None:
         ]
         text = " ".join(lines)
         async_tts.speak(text)
-        log(f"[Help] Mod keybind reference spoken")
+        log("[Help] Mod keybind reference spoken")
 
     def patched_process_level_input(self):
         """Intercept mod hotkeys before normal input processing.
@@ -5034,6 +5166,42 @@ if _PyGameView is not None:
 
         deploying = getattr(self.game, 'deploying', False)
         _game_ref[0] = self.game
+
+        # Telemetry: lazy init_run on first entry; rotate realm file on level change.
+        try:
+            if _telemetry.ENABLED:
+                _g = self.game
+                _rn = getattr(_g, 'run_number', None)
+                _ln = getattr(_g, 'level_num', None)
+                if _telemetry._state.get("run_dir") is None and _rn is not None:
+                    _telemetry.init_run(_rn, MOD_VERSION)
+                if _ln is not None and _ln != _telemetry._state.get("realm_num"):
+                    _telemetry.set_realm(_ln)
+                    try:
+                        _lvl = _g.cur_level
+                        _p = _g.p1
+                        _enemies = [u for u in _lvl.units if Level.are_hostile(_p, u)]
+                        _spawners = [u for u in _enemies if getattr(u, 'is_lair', False)]
+                        # Per-type roster — exposes realm difficulty profile
+                        # without requiring a screenshot read at analysis time.
+                        _roster = {}
+                        for _u in _enemies:
+                            _nm = getattr(_u, 'name', None) or type(_u).__name__
+                            if getattr(_u, 'is_lair', False):
+                                _nm = f"Spawner_{_nm}"
+                            _roster[_nm] = _roster.get(_nm, 0) + 1
+                        _telemetry.emit('level_enter',
+                                        realm=_ln,
+                                        enemies=len(_enemies),
+                                        spawners=len(_spawners),
+                                        roster=_roster,
+                                        screenshot=f"saves/{_rn}/level_{_ln}_begin.png",
+                                        stats=f"saves/{_rn}/stats.level_{_ln}.txt",
+                                        combat_log=f"saves/{_rn}/log/combat_log.txt")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         # Gameover/victory detection — speak outcome once, then pass through
         # for the "any key → reminisce" transition in the original handler.
@@ -5057,6 +5225,58 @@ if _PyGameView is not None:
                 _turn_announced[0] = True
                 _turn_count[0] += 1
                 now = time.time()
+                # Telemetry: per-turn vitals snapshot (heartbeat). Closes the
+                # gap left by on-demand-only [Vitals]. Player subjective state
+                # captured once per turn regardless of whether F was pressed.
+                try:
+                    if _telemetry.ENABLED:
+                        _p = self.game.p1
+                        if _p:
+                            _telemetry.set_turn(_turn_count[0])
+                            _telemetry.set_pos(_p.x, _p.y)
+                            _statuses = sorted(set(
+                                getattr(b, 'name', '') for b in getattr(_p, 'buffs', [])
+                                if getattr(b, 'name', '')
+                            ))
+                            _charges = {}
+                            for _sp in getattr(_p, 'spells', []):
+                                _n = getattr(_sp, 'name', None)
+                                _c = getattr(_sp, 'cur_charges', None)
+                                if _n is not None and _c is not None:
+                                    _charges[_n] = _c
+                            # Item inventory — consumable depth per turn
+                            _items = {}
+                            for _it in getattr(_p, 'items', []):
+                                _iname = getattr(_it, 'name', None)
+                                if _iname:
+                                    _items[_iname] = _items.get(_iname, 0) + 1
+                            # Minion roster — allies on the board (bounded, useful)
+                            _minions = []
+                            try:
+                                _lvl = self.game.cur_level
+                                if _lvl:
+                                    for _u in _lvl.units:
+                                        if _u is _p or Level.are_hostile(_p, _u):
+                                            continue
+                                        _nm = getattr(_u, 'name', None) or type(_u).__name__
+                                        _minions.append({
+                                            'n': _nm,
+                                            'p': [getattr(_u, 'x', 0), getattr(_u, 'y', 0)],
+                                            'hp': getattr(_u, 'cur_hp', None),
+                                        })
+                            except Exception:
+                                pass
+                            _telemetry.emit('turn_end',
+                                            hp=getattr(_p, 'cur_hp', None),
+                                            hp_max=getattr(_p, 'max_hp', None),
+                                            sp=getattr(_p, 'xp', None),
+                                            shields=getattr(_p, 'shields', None),
+                                            status=_statuses,
+                                            charges=_charges,
+                                            items=_items,
+                                            minions=_minions)
+                except Exception:
+                    pass
                 # Flush queued speech before turn signal, then HP (#39)
                 batcher.flush()
                 _flush_hp()
@@ -5134,6 +5354,20 @@ if _PyGameView is not None:
                                pygame.K_LALT, pygame.K_RALT,
                                pygame.K_LCTRL, pygame.K_RCTRL):
                     continue
+                # Telemetry: record every hotkey press with modifiers. Closes
+                # the single biggest mindset-visibility gap — reveals exactly
+                # which scans/queries the player runs and when.
+                try:
+                    if _telemetry.ENABLED:
+                        _m = pygame.key.get_mods()
+                        _telemetry.emit('hotkey',
+                                        key=pygame.key.name(evt.key),
+                                        shift=bool(_m & pygame.KMOD_SHIFT),
+                                        alt=bool(_m & pygame.KMOD_ALT),
+                                        ctrl=bool(_m & pygame.KMOD_CTRL),
+                                        deploying=bool(deploying))
+                except Exception:
+                    pass
                 # Reset scan cycling on keys that aren't the respective scan key
                 if evt.key != pygame.K_e:
                     _enemy_scanner.reset()
@@ -5315,7 +5549,8 @@ if _PyGameView is not None:
             log("[Deploy] Aborted")
 
     _PyGameView.process_level_input = patched_process_level_input
-    log("  Custom hotkeys installed (F=Vitals, E=Enemies, Q=Landmarks, G=Charges, D=Detail, T=Threat, B=Space, LCtrl=Cancel, Z=Repeat, [/]=History, Deploy:1-5)")
+    log("  Custom hotkeys installed (F=Vitals, E=Enemies, Q=Landmarks, G=Charges, "
+        "D=Detail, T=Threat, B=Space, LCtrl=Cancel, Z=Repeat, [/]=History, Deploy:1-5)")
 
     # ---- Deploy Confirm Hook ----
 
@@ -5384,7 +5619,7 @@ if _PyGameView is not None:
             blocker = self.game.cur_level.get_unit_at(new_x, new_y)
             if blocker and Level.are_hostile(self.game.p1, blocker):
                 is_melee = True
-        except:
+        except Exception:
             pass
 
         result = _original_try_move(self, movedir)
@@ -5543,7 +5778,7 @@ if _PyGameView is not None:
             for k in keys:
                 if k is not None:
                     return pygame.key.name(k)
-        except:
+        except Exception:
             pass
         return "?"
 
@@ -5585,10 +5820,12 @@ if _PyGameView is not None:
             return f"{nav_lr} to browse slides. {abort} to exit"
 
         if state == _STATE_REBIND:
-            return f"{nav_ud} to navigate bindings. {nav_lr} for primary or secondary. {confirm} to rebind. {abort} to save and exit"
+            return (f"{nav_ud} to navigate bindings. {nav_lr} for primary or secondary. "
+                    f"{confirm} to rebind. {abort} to save and exit")
 
         if state == _STATE_SETUP_CUSTOM:
-            return f"{nav_ud} to browse mutators. {nav_lr} between available, play, and selected. {confirm} to add or remove. {abort} to cancel"
+            return (f"{nav_ud} to browse mutators. {nav_lr} between available, play, and selected. "
+                    f"{confirm} to add or remove. {abort} to cancel")
 
         if state == _STATE_PICK_MUTATOR_PARAMS:
             return f"{nav_ud} to browse options. {confirm} to select. {abort} to cancel"
@@ -5803,7 +6040,7 @@ if _PyGameView is not None:
             desc = ''
             try:
                 desc = self.examine_target.get_description()
-            except:
+            except Exception:
                 pass
             msg = f"{name}. {desc}" if desc else name
             async_tts.speak(msg)
@@ -5943,7 +6180,7 @@ if _PyGameView is not None:
                 return f"Level {level} end. Slide {idx + 1} of {total}"
             else:
                 return f"Slide {idx + 1} of {total}"
-        except:
+        except Exception:
             return "Slide"
 
     def _patched_process_reminisce(self):
@@ -5978,7 +6215,7 @@ if _PyGameView is not None:
             idx = 1 + view.combat_log_offset
             if 0 <= idx < len(lines):
                 return lines[idx]
-        except:
+        except Exception:
             pass
         return ""
 
