@@ -486,11 +486,13 @@ def _flush_collapsed_events(events, tts):
         # T2: Minion target groups
         if minion_events:
             groups = _build_target_groups(minion_events)
+            groups = _merge_same_shape_groups(groups)
             _deliver_target_groups(groups, tts, "minion")
 
         # T3: World target groups
         if world_events:
             groups = _build_target_groups(world_events)
+            groups = _merge_same_shape_groups(groups)
             _deliver_target_groups(groups, tts, "world")
 
         # Summon casts (no target — grouped by caster×spell)
@@ -534,7 +536,11 @@ def _build_target_groups(events):
 def _deliver_target_groups(groups, tts, tier_label):
     """Format and deliver target groups with LoS split."""
     for group in groups:
-        text = _format_target_group(group)
+        # Collective (same-shape merged) groups carry pre-rendered text.
+        if '_collective_text' in group:
+            text = group['_collective_text']
+        else:
+            text = _format_target_group(group)
         if not group['los']:
             cardinal = group.get('cardinal', '')
             prefix = f"Out of sight, {cardinal}" if cardinal else "Out of sight"
@@ -697,7 +703,8 @@ def are_adjacent(a, b):
 from helpers import (_cardinal_direction, _bearing_index, _direction_offset, _pluralize,
                      _ray_length, _RAYCAST_DIRS,
                      _classify_terrain, _TERRAIN_LABELS, _scan_corridor_branches,
-                     _quadrant_label, _number_deploy_dupes)
+                     _quadrant_label, _number_deploy_dupes,
+                     _merge_same_shape_groups)
 
 # ---- Pathfinding Via Hints ----
 _VIA_HINT_CAP = 3  # Max blocked entries per scan that get pathfinding computation
@@ -5518,6 +5525,14 @@ if _PyGameView is not None:
         _pre_native_pos = None
         if deploying and self.deploy_target:
             _pre_native_pos = (self.deploy_target.x, self.deploy_target.y)
+
+        # Activate batcher BEFORE the original handler so events emitted inside
+        # step_logic (player's cast fallout) are captured by the collapse tier
+        # instead of falling through to immediate speech. The post-original
+        # check below remains as a safety net; start_batching() is idempotent.
+        if (_turn_announced[0] and
+                getattr(self.game.cur_level, 'is_awaiting_input', False)):
+            batcher.start_batching()
 
         _original_process_level_input(self)
 

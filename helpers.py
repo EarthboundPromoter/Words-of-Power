@@ -353,3 +353,102 @@ def _number_deploy_dupes(items):
         else:
             result.append((entity, x, y, n))
     return result
+
+
+# ---- Collapse-Tier Same-Shape Merging ----
+# When many same-type units experience the same event in the same turn
+# (e.g. 13 Ghostly Cursed Cats each heal 5), naive id-based grouping
+# produces 13 one-line readouts. This merges them into one collective
+# line: "13 Ghostly Cursed Cats heal 5, east."
+#
+# Input groups are dicts as produced by _build_target_groups in
+# screen_reader.py: {'target_name', 'target_unit', 'cardinal', 'los',
+# 'distance', 'direction', 'events': [evt_dict, ...]}.
+# Output groups preserve the same shape; collective groups additionally
+# carry '_collective_text' which the deliverer speaks verbatim.
+
+MERGE_MIN_COUNT = 3         # under this, speak groups individually
+MAJORITY_CARDINAL_RATIO = 0.6  # fraction of same cardinal needed to claim direction
+
+def _collective_cardinal(cardinals):
+    """Pick a shared cardinal from a list, or 'scattered' when mixed.
+    Empty strings are ignored. Returns '' if no cardinal data at all."""
+    filtered = [c for c in cardinals if c]
+    if not filtered:
+        return ''
+    most_common, count = Counter(filtered).most_common(1)[0]
+    if count / len(filtered) >= MAJORITY_CARDINAL_RATIO:
+        return most_common
+    return 'scattered'
+
+def _merge_same_shape_groups(groups, min_count=MERGE_MIN_COUNT):
+    """Collapse single-event groups sharing (event_type, target_name, payload)
+    into collective groups. Groups with multiple events pass through unchanged.
+
+    Only heal events are merged in this pass; damage/death merging is
+    deferred pending design review.
+
+    Returns a new list of group dicts, re-sorted by (not los, distance).
+    """
+    buckets = {}        # (event_type, target_name, sig) -> [groups]
+    passthrough = []
+
+    for group in groups:
+        events = group.get('events', [])
+        if len(events) != 1:
+            passthrough.append(group)
+            continue
+        evt = events[0]
+        etype = evt.get('event_type', '')
+        if etype != 'heal':
+            passthrough.append(group)
+            continue
+        sig = ('heal', evt.get('heal_amount', 0))
+        key = (etype, group.get('target_name', ''), sig)
+        buckets.setdefault(key, []).append(group)
+
+    result = list(passthrough)
+    for key, bucket in buckets.items():
+        if len(bucket) < min_count:
+            # Not enough to warrant a collective line — speak individually.
+            result.extend(bucket)
+        else:
+            result.append(_make_collective_group(bucket, key))
+
+    result.sort(key=lambda g: (not g.get('los', True), g.get('distance', 0)))
+    return result
+
+def _make_collective_group(bucket, key):
+    """Build a synthetic collective group dict from N same-shape single-event groups."""
+    etype, target_name, sig = key
+    count = len(bucket)
+    cardinal = _collective_cardinal([g.get('cardinal', '') for g in bucket])
+    # LoS: True if ANY in-sight (so no "Out of sight" prefix unless all are out);
+    # this avoids hiding partially-visible collective events behind the prefix.
+    any_los = any(g.get('los', True) for g in bucket)
+    distances = [g.get('distance', 0) for g in bucket]
+    mean_distance = sum(distances) / len(distances) if distances else 0
+
+    plural = _pluralize(target_name)
+    if etype == 'heal':
+        heal_amount = sig[1]
+        if cardinal == 'scattered':
+            text = f"{count} {plural} heal {heal_amount}, scattered"
+        elif cardinal:
+            text = f"{count} {plural} heal {heal_amount}, {cardinal}"
+        else:
+            text = f"{count} {plural} heal {heal_amount}"
+    else:
+        # Safety fallback — shouldn't hit given the current filter.
+        text = f"{count} {plural}"
+
+    return {
+        'target_name': f"{count} {plural}",
+        'target_unit': None,
+        'direction': cardinal,
+        'cardinal': cardinal,
+        'distance': mean_distance,
+        'los': any_los,
+        'events': [],
+        '_collective_text': text,
+    }
