@@ -385,8 +385,10 @@ def _merge_same_shape_groups(groups, min_count=MERGE_MIN_COUNT):
     """Collapse single-event groups sharing (event_type, target_name, payload)
     into collective groups. Groups with multiple events pass through unchanged.
 
-    Only heal events are merged in this pass; damage/death merging is
-    deferred pending design review.
+    Merges heal, damage, and death events. Signature per type:
+    - heal: (heal_amount,)
+    - damage: (source, spell, amount, dtype)
+    - death: (is_expired,)
 
     Returns a new list of group dicts, re-sorted by (not los, distance).
     """
@@ -400,10 +402,17 @@ def _merge_same_shape_groups(groups, min_count=MERGE_MIN_COUNT):
             continue
         evt = events[0]
         etype = evt.get('event_type', '')
-        if etype != 'heal':
+        if etype == 'heal':
+            sig = ('heal', evt.get('heal_amount', 0))
+        elif etype == 'damage':
+            sig = ('damage', evt.get('source_name', ''),
+                   evt.get('spell_name', ''),
+                   evt.get('damage', 0), evt.get('damage_type', ''))
+        elif etype == 'death':
+            sig = ('death', evt.get('is_expired', False))
+        else:
             passthrough.append(group)
             continue
-        sig = ('heal', evt.get('heal_amount', 0))
         key = (etype, group.get('target_name', ''), sig)
         buckets.setdefault(key, []).append(group)
 
@@ -432,15 +441,31 @@ def _make_collective_group(bucket, key):
     plural = _pluralize(target_name)
     if etype == 'heal':
         heal_amount = sig[1]
-        if cardinal == 'scattered':
-            text = f"{count} {plural} heal {heal_amount}, scattered"
-        elif cardinal:
-            text = f"{count} {plural} heal {heal_amount}, {cardinal}"
+        body = f"{count} {plural} heal {heal_amount}"
+    elif etype == 'damage':
+        _, source_name, spell_name, damage, damage_type = sig
+        entry_parts = [source_name]
+        show_spell = (spell_name and spell_name != source_name
+                      and spell_name != "Melee Attack")
+        if show_spell:
+            entry_parts.append(spell_name)
+        if show_spell and damage_type and damage_type.lower() in spell_name.lower():
+            entry_parts.append(str(damage))
         else:
-            text = f"{count} {plural} heal {heal_amount}"
+            entry_parts.append(f"{damage} {damage_type}")
+        body = f"{count} {plural}, {' '.join(entry_parts)}"
+    elif etype == 'death':
+        is_expired = sig[1]
+        body = f"{count} {plural} {'expired' if is_expired else 'killed'}"
     else:
-        # Safety fallback — shouldn't hit given the current filter.
-        text = f"{count} {plural}"
+        body = f"{count} {plural}"
+
+    if cardinal == 'scattered':
+        text = f"{body}, scattered"
+    elif cardinal:
+        text = f"{body}, {cardinal}"
+    else:
+        text = body
 
     return {
         'target_name': f"{count} {plural}",

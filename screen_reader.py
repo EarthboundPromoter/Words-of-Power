@@ -542,8 +542,11 @@ def _deliver_target_groups(groups, tts, tier_label):
         else:
             text = _format_target_group(group)
         if not group['los']:
-            cardinal = group.get('cardinal', '')
-            prefix = f"Out of sight, {cardinal}" if cardinal else "Out of sight"
+            if '_collective_text' in group:
+                prefix = "Out of sight"
+            else:
+                cardinal = group.get('cardinal', '')
+                prefix = f"Out of sight, {cardinal}" if cardinal else "Out of sight"
             text = f"{prefix}. {text}"
         log(f"[Collapsed {tier_label}] {_log_ctx()} {text}")
         tts.speak(text)
