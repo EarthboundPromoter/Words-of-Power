@@ -345,6 +345,40 @@ log(f"[Init] Spoke version: {MOD_VERSION}")
 #   4. is_awaiting_input → True:  back to step 1
 # ============================================================================
 
+_DEDUP_MIN_RUN = 3
+
+class _FlushDeduper:
+    """Wraps a TTS backend during flush to coalesce consecutive identical speech.
+    Runs of N >= _DEDUP_MIN_RUN identical strings become one 'N times. {text}' call."""
+
+    def __init__(self, tts):
+        self._tts = tts
+        self._pending_text = None
+        self._pending_count = 0
+
+    def speak(self, text):
+        if text == self._pending_text:
+            self._pending_count += 1
+        else:
+            self._emit_pending()
+            self._pending_text = text
+            self._pending_count = 1
+
+    def _emit_pending(self):
+        if self._pending_text is None:
+            return
+        if self._pending_count >= _DEDUP_MIN_RUN:
+            log(f"[Dedup] {self._pending_count}x: {self._pending_text}")
+            self._tts.speak(f"{self._pending_count} times. {self._pending_text}")
+        else:
+            for _ in range(self._pending_count):
+                self._tts.speak(self._pending_text)
+        self._pending_text = None
+        self._pending_count = 0
+
+    def done(self):
+        self._emit_pending()
+
 class SpeechBatcher:
     """Queues speech during enemy turns, flushes at turn boundary.
 
@@ -414,7 +448,7 @@ class SpeechBatcher:
         1. QUEUED messages (flat, chronological) — player spell results, kills
         2. COLLAPSED minion target groups (T2) — nearest in-LoS first
         3. COLLAPSED world target groups (T3) — nearest in-LoS first
-        4. COLLAPSED summon casts — grouped by caster×spell"""
+        4. COLLAPSED enemy casts — grouped by caster×spell"""
         with self._lock:
             if not self._queue and not self._collapsed:
                 self._active = False
@@ -425,13 +459,17 @@ class SpeechBatcher:
             self._collapsed.clear()
             self._active = False
 
+        dedup = _FlushDeduper(self._tts)
+
         # Phase 1: QUEUED messages (flat, chronological)
         for seq, text in queued:
-            self._tts.speak(text)
+            dedup.speak(text)
 
         # Phase 2: COLLAPSED events (target-grouped)
         if collapsed:
-            _flush_collapsed_events(collapsed, self._tts)
+            _flush_collapsed_events(collapsed, dedup)
+
+        dedup.done()
 
         q_count = len(queued)
         c_count = len(collapsed)
@@ -466,18 +504,18 @@ def _flush_collapsed_events(events, tts):
     Ordering:
     1. Minion target groups (T2): in-LoS nearest first, then out-of-LoS
     2. World target groups (T3): in-LoS nearest first, then out-of-LoS
-    3. Summon casts: grouped by (caster_type, spell)
+    3. Enemy casts: grouped by (caster_type, spell)
     """
     try:
         # Separate by tier
         minion_events = []
         world_events = []
-        summon_casts = []
+        cast_events = []
 
         for evt in events:
             tier = evt.get('tier', TIER_WORLD)
-            if tier == TIER_SUMMON:
-                summon_casts.append(evt)
+            if tier == TIER_CAST:
+                cast_events.append(evt)
             elif tier == TIER_MINION:
                 minion_events.append(evt)
             else:
@@ -495,9 +533,9 @@ def _flush_collapsed_events(events, tts):
             groups = _merge_same_shape_groups(groups)
             _deliver_target_groups(groups, tts, "world")
 
-        # Summon casts (no target — grouped by caster×spell)
-        if summon_casts:
-            _deliver_summon_casts(summon_casts, tts)
+        # Enemy casts (no target — grouped by caster×spell)
+        if cast_events:
+            _deliver_cast_groups(cast_events, tts)
     except Exception as e:
         log(f"[Collapsed] Error in flush: {e}")
         # Fallback: deliver as flat text
@@ -643,8 +681,8 @@ def _format_target_group(group):
 
     return ". ".join(parts)
 
-def _deliver_summon_casts(casts, tts):
-    """Group and deliver summon casts by (caster_name, spell_name)."""
+def _deliver_cast_groups(casts, tts):
+    """Group and deliver enemy casts by (caster_name, spell_name)."""
     groups = {}  # (caster_name, spell_name) -> count
     order = []   # preserve first-appearance order
     for evt in casts:
@@ -661,7 +699,7 @@ def _deliver_summon_casts(casts, tts):
             text = f"{count} {_pluralize(caster)} cast {spell}"
         else:
             text = f"{caster} casts {spell}"
-        log(f"[Collapsed summon] {_log_ctx()} {text}")
+        log(f"[Collapsed cast] {_log_ctx()} {text}")
         tts.speak(text)
 
 batcher = SpeechBatcher(async_tts)
@@ -896,7 +934,7 @@ def _deploy_get_interactions(level):
 # Phase B speech batching: events grouped by target unit at flush time.
 TIER_MINION = 2   # Player-team minion events (damage, heals, deaths)
 TIER_WORLD = 3    # Enemy/world events (damage, heals, deaths)
-TIER_SUMMON = 4   # Summon casts (no target, grouped by caster×spell)
+TIER_CAST = 4     # Enemy casts (no target, grouped by caster×spell)
 
 # _pluralize imported from helpers.py
 
@@ -1118,19 +1156,21 @@ def on_spell_cast(event):
             if is_summon:
                 log(f"[Summon Cast] {_log_ctx()} {text}")
                 batcher.speak_collapsed({
-                    'tier': TIER_SUMMON,
+                    'tier': TIER_CAST,
                     'event_type': 'cast',
                     'source_name': caster_name,
                     'spell_name': spell_name,
                     'text': text,
                 })
             else:
-                # Non-summon enemy casts: during batching, damage events carry
-                # source attribution in collapsed groups so cast is redundant.
-                # When not batching (first turn), speak for awareness.
                 log(f"[Enemy Cast] {_log_ctx()} {text}")
-                if not batcher.is_active:
-                    async_tts.speak(text)
+                batcher.speak_collapsed({
+                    'tier': TIER_CAST,
+                    'event_type': 'cast',
+                    'source_name': caster_name,
+                    'spell_name': spell_name,
+                    'text': text,
+                })
             return
         text = f"Cast {_name(event.spell)}"
         log(f"[Cast] {_log_ctx()} {text}")
@@ -1693,6 +1733,127 @@ def _on_unit_added_adjacency(evt):
 def _on_death_adjacency(evt):
     adjacency_tracker.on_unit_death(evt)
 
+# ---- Enters Line-of-Sight Tracking (S82) ----
+# Announces when hostile units cross from outside to inside the player's field of view.
+# Hybrid: Layer 1 = per-unit EventOnMoved (enemy turns), Layer 2 = full diff (player moves).
+
+_ENTERS_LOS_COLLAPSE_THRESHOLD = 4
+
+class LoSTracker:
+    """Tracks hostile units visible to the player. Announces LoS transitions."""
+
+    def __init__(self, tts):
+        self._tts = tts
+        self._visible = set()  # unit references currently in player LoS
+        self._seeded = False
+
+    def reset(self):
+        self._visible.clear()
+        self._seeded = False
+
+    def seed(self, level, player):
+        """Populate initial visible set silently on level entry."""
+        self._visible.clear()
+        for unit in level.units:
+            if unit == player or not unit.is_alive():
+                continue
+            if Level.are_hostile(unit, player) and level.can_see(player.x, player.y, unit.x, unit.y):
+                self._visible.add(unit)
+        self._seeded = True
+        log(f"[LoS] Seeded {len(self._visible)} visible enemies")
+
+    def _announce_entries(self, entries, player_initiated):
+        if not entries:
+            return
+        if len(entries) >= _ENTERS_LOS_COLLAPSE_THRESHOLD:
+            text = f"{len(entries)} enemies enter view"
+            log(f"[LoS] {_log_ctx()} {text} (collapsed)")
+            batcher.speak_immediate(text)
+            return
+        for unit in sorted(entries, key=lambda u: max(abs(u.x - _game_ref[0].p1.x), abs(u.y - _game_ref[0].p1.y))):
+            dx = unit.x - _game_ref[0].p1.x
+            dy = unit.y - _game_ref[0].p1.y
+            offset = _direction_offset(dx, dy)
+            text = f"{_name(unit)} appears, {offset}"
+            log(f"[LoS] {_log_ctx()} {text}")
+            batcher.speak_immediate(text)
+
+    def on_unit_moved(self, evt):
+        """Layer 1: per-unit check on enemy movement."""
+        try:
+            if _level_complete[0] or not self._seeded:
+                return
+            game = _game_ref[0]
+            if not game or not game.p1:
+                return
+            unit = evt.unit
+            if _is_player(unit):
+                self._on_player_moved(game.cur_level, game.p1)
+                return
+            if not unit.is_alive() or not Level.are_hostile(unit, game.p1):
+                return
+            player = game.p1
+            now_visible = game.cur_level.can_see(player.x, player.y, unit.x, unit.y)
+            was_visible = unit in self._visible
+            if now_visible and not was_visible:
+                self._visible.add(unit)
+                self._announce_entries([unit], False)
+            elif not now_visible and was_visible:
+                self._visible.discard(unit)
+        except Exception as e:
+            log(f"[LoS] on_moved error: {e}")
+
+    def _on_player_moved(self, level, player):
+        """Layer 2: full diff when the player moves."""
+        new_visible = set()
+        for unit in level.units:
+            if unit == player or not unit.is_alive():
+                continue
+            if Level.are_hostile(unit, player) and level.can_see(player.x, player.y, unit.x, unit.y):
+                new_visible.add(unit)
+        entries = new_visible - self._visible
+        self._visible = new_visible
+        self._announce_entries(list(entries), True)
+
+    def on_unit_added(self, evt):
+        """Catch spawns/summons that appear directly in LoS."""
+        try:
+            if _level_complete[0] or not self._seeded:
+                return
+            game = _game_ref[0]
+            if not game or not game.p1:
+                return
+            unit = evt.unit
+            if _is_player(unit):
+                return
+            if not unit.is_alive() or not Level.are_hostile(unit, game.p1):
+                return
+            # Skip spell-based summons — already announced via on_spell_cast
+            source = getattr(unit, 'source', None)
+            if source is not None and isinstance(source, Level.Spell):
+                self._visible.add(unit)
+                return
+            player = game.p1
+            if game.cur_level.can_see(player.x, player.y, unit.x, unit.y):
+                self._visible.add(unit)
+        except Exception as e:
+            log(f"[LoS] on_unit_added error: {e}")
+
+    def on_unit_death(self, evt):
+        """Remove dead units from tracking set."""
+        self._visible.discard(evt.unit)
+
+los_tracker = LoSTracker(async_tts)
+
+def _on_moved_los(evt):
+    los_tracker.on_unit_moved(evt)
+
+def _on_unit_added_los(evt):
+    los_tracker.on_unit_added(evt)
+
+def _on_death_los(evt):
+    los_tracker.on_unit_death(evt)
+
 # Pickle-safe wrapper: Buff-based spawn announcement (boss minions, etc.)
 def _on_unit_added_spawn(evt):
     """Announce non-spell spawns (buff-based summons like boss minion generation).
@@ -1786,12 +1947,16 @@ def register_triggers(event_manager):
     event_manager.register_global_trigger(Level.EventOnMoved, _on_moved_adjacency)
     event_manager.register_global_trigger(Level.EventOnUnitAdded, _on_unit_added_adjacency)
     event_manager.register_global_trigger(Level.EventOnDeath, _on_death_adjacency)
+    # Enters-LoS tracking (S82) — pickle-safe wrappers
+    event_manager.register_global_trigger(Level.EventOnMoved, _on_moved_los)
+    event_manager.register_global_trigger(Level.EventOnUnitAdded, _on_unit_added_los)
+    event_manager.register_global_trigger(Level.EventOnDeath, _on_death_los)
     # Soul Jar creation detection (S59 — Bug #47)
     event_manager.register_global_trigger(Level.EventOnUnitAdded, _on_unit_added_souljar)
     # Buff-based spawn announcement (S65 — boss minions, etc.)
     event_manager.register_global_trigger(Level.EventOnUnitAdded, _on_unit_added_spawn)
     log("[Screen Reader] Triggers registered: SpellCast, Damaged, Death, Healed, BuffApply, "
-        "BuffRemove, ItemPickup, LevelComplete, ShieldRemoved, Moved, UnitAdded (adjacency+souljar+spawn)")
+        "BuffRemove, ItemPickup, LevelComplete, ShieldRemoved, Moved, UnitAdded (adjacency+souljar+spawn+los)")
 
 # Update lifecycle hook to register triggers on every level transition
 def patched_setup_logging_v2(self, logdir, level_num):
@@ -1809,6 +1974,9 @@ def patched_setup_logging_v2(self, logdir, level_num):
     _turn_announced[0] = False
     _level_complete[0] = False
     adjacency_tracker.reset()
+    los_tracker.reset()
+    if getattr(self, 'player_unit', None):
+        los_tracker.seed(self, self.player_unit)
     _cloud_arrivals.clear()
     # Movement direction state reset (defined later, but these are module-level mutable lists)
     try:
