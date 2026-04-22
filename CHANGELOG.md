@@ -2,6 +2,20 @@
 
 All notable changes to Words of Power are documented here.
 
+## [0.2.4] - 2026-04-22
+
+### New Features
+
+- **Enters line of sight** — Enemies entering your field of view are announced with name and direction ("Wolf appears, 3 east"). When the player moves, a full visibility diff detects all newly visible enemies. When enemies move into view or spawn in sight, they're announced individually. Large groups (above threshold) collapse to a count ("7 enemies enter view"). Dead units are cleaned from tracking automatically.
+- **Enemy cast batching** — Non-summon enemy casts (Stone Gaze, Heal Ally, etc.) now route through the collapsed speech tier and group by caster and spell, matching summon cast behavior ("5 Cockatrices cast Stone Gaze"). Previously these were silently dropped during batching.
+- **Flush-time dedup** — Three or more consecutive identical speech lines during batch flush are coalesced ("4 times. Wolf appears, 3 east"). Reduces repetition in high-density turns.
+
+### Improvements
+
+- **Same-shape group merging** — Single-event target groups sharing the same event type and payload (e.g., thirteen identical heals) are merged into one collective line ("13 Ghostly Cursed Cats heal 5, east"). Applies to heals, damage, and deaths.
+- **Pre-activation batching fix** — Batcher now activates before spell resolution, so events fired during the player's cast are captured by the collapse tier instead of falling through to immediate speech.
+- **Known issues updated** — Removed stale entries for screens voiced in 0.2.2 and outdated playtesting coverage claims.
+
 ## [0.2.3] - 2026-04-10
 
 ### New Features
