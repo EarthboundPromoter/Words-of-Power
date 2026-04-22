@@ -5,6 +5,11 @@ logs/
 # Telemetry (dev-only, author's machine; not shipped to players)
 telemetry/
 telemetry_enabled
+telemetry.py
+scan_run.py
+scan_all_runs.py
+backfill_old_runs.py
+link_historical_runs.py
 
 # Binary dependencies (users provide their own NVDA DLL)
 *.dll
@@ -21,10 +26,11 @@ __pycache__/
 # Tests (dev only)
 tests/
 
-# IDE / editor
+# IDE / editor / linting
 .claude/
 .vscode/
 *.code-workspace
+ruff.toml
 
 # User settings (generated on first run)
 settings.ini
@@ -33,6 +39,9 @@ settings.ini
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Research (dev-only)
+research_*
 
 # Drafts
 discord_announcement*
