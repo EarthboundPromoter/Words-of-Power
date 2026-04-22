@@ -1,20 +1,16 @@
 # Known Issues
 
-## Unvoiced Screens
+## Inaccessible Base-Game Features
 
-The following screens do not have speech output yet:
-
-- **Custom game mutator screens** — The three screens for configuring custom game mutators (setup, parameter selection, value entry) are silent. Standard game modes work fine.
-- **Key rebind screen** — The in-game key rebinding interface has no speech output.
 - **"Never Learned" and "Never Victory" buttons** — These are mouse-only in the base game and have no keyboard equivalent. Not accessible without a mouse.
-- **Empty shop** — If a shop has no items remaining, nothing is spoken. You'll just hear silence when examining the tile.
+- **Empty shop** — If a shop has no items remaining, nothing is spoken. You'll hear silence when examining the tile.
 
-## Untested Features
+## Speech Output
 
+- **High-density turns** — Proc-heavy builds in late game can generate dozens of events per turn. Speech batching handles this well in most cases, but particularly chaotic turns (mass summons chaining into mass kills) may still produce long output. Active development is focused here.
 - **Cooldown ready notification** — The mod announces when a spell comes off cooldown, but no playtest has encountered a cooldown spell yet. This feature exists but is unverified.
-- **Late-game content** — Playtesting has covered levels 1 through 5. Later floors with higher enemy density, more complex encounters, and endgame mechanics have not been tested. Speech output may become too dense or miss edge cases that only appear in deeper runs.
 
 ## Setup Notes
 
-- NVDA must be running before you launch the game. If NVDA starts after the game, the mod won't connect.
-- The mod requires `nvdaControllerClient64.dll` in the `mods/screen_reader/` folder. This file ships with NVDA — see the Quick Start section in README.md for setup details.
+- Your screen reader must be running before you launch the game. If it starts after the game, the mod won't connect.
+- Tolk.dll must be in the `mods/screen_reader/` folder alongside `screen_reader.py`. Without it, the mod falls back to direct NVDA support only (no JAWS or other screen readers).
