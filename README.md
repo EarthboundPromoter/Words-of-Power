@@ -141,6 +141,12 @@ Tag and attribute filters are voiced when toggled.
 
 Include: what you were doing, what you heard (or didn't), and the relevant section of the debug log.
 
+## Privacy
+
+This mod makes no network connections. It does not collect, transmit, or upload any data. Everything stays on your machine.
+
+If you read the source code, you'll see references to a `telemetry` module. This is a dev-only tool the author uses for post-run analysis — it writes structured logs to local disk to help improve speech output. The telemetry module is not included in the release download, so the import silently fails and every telemetry call is a no-op. Even if the module were present, it requires a manually created sentinel file to activate, and contains no network code.
+
 ## Known Issues
 
 See [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
