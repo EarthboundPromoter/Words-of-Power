@@ -33,6 +33,13 @@ if os.path.exists(log_file_path) and os.path.getsize(log_file_path) > 0:
         pass  # If rename fails (e.g. duplicate), just overwrite
 log_file = open(log_file_path, 'w', encoding='utf-8')
 
+# Dev-only telemetry: writes structured JSONL to local disk for the author's
+# own post-run analysis. The telemetry module is NOT shipped in the release zip,
+# so this import silently fails on any player's machine and every _telemetry
+# call below becomes a no-op. Even if the module were present, it requires a
+# sentinel file (telemetry_enabled) to activate and contains zero network code —
+# no data ever leaves the machine. The mod makes no outbound connections of any
+# kind. Source: https://github.com/EarthboundPromoter/Words-of-Power
 try:
     from . import telemetry as _telemetry  # type: ignore
 except Exception:
