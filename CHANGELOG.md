@@ -16,6 +16,10 @@ All notable changes to Words of Power are documented here.
 - **Pre-activation batching fix** — Batcher now activates before spell resolution, so events fired during the player's cast are captured by the collapse tier instead of falling through to immediate speech.
 - **Known issues updated** — Removed stale entries for screens voiced in 0.2.2 and outdated playtesting coverage claims.
 
+### Post-Release Hotfix
+
+- **Telemetry import crash fix** — Fixed a crash when the dev-only telemetry module is absent. The import fallback had both attempts in a single try/except, so if the package import failed the bare import also raised an unhandled ImportError. Now falls back cleanly to disabled telemetry. Does not affect gameplay.
+
 ## [0.2.3] - 2026-04-10
 
 ### New Features
