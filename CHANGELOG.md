@@ -2,6 +2,13 @@
 
 All notable changes to Words of Power are documented here.
 
+## [0.2.5] - 2026-04-24
+
+### Bug Fixes
+
+- **Tile type under cloud now spoken in Look mode** — Looking at a Storm Cloud (or any cloud) on an empty floor tile now reads "Storm Cloud, 5 turns. Floor" instead of just "Storm Cloud, 5 turns". Cloud-on-wall and cloud-on-chasm already worked; cloud-on-floor was the missing case. Reported by playtester (Boing) on a Storm Troll realm where the cloud overlay made it impossible to tell what terrain was underneath.
+- **Spurious "Within AoE" warning on non-AoE spells with stacked radius** — Movement spells like Blink and Teleport pick up a `radius >= 1` stat from global radius modifiers (e.g., Aether Wisp), but the radius is purely cosmetic — no damage or effect propagates. The cursor's AoE warning now checks the spell's *base* radius rather than its modified radius, so single-target/movement spells no longer announce "Within AoE 1 enemy" when the cursor sits on a unit.
+
 ## [0.2.4] - 2026-04-22
 
 ### New Features

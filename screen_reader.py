@@ -1,5 +1,5 @@
 # Rift Wizard 2 Screen Reader Mod — Words of Power
-MOD_VERSION = "0.2.4"
+MOD_VERSION = "0.2.5"
 
 import sys
 import os
@@ -3277,13 +3277,15 @@ if _PyGameView is not None:
                 else:
                     parts.append(cloud_name)
 
-            # Terrain type (only if nothing else to say, or always for wall/chasm)
+            # Terrain type — always announce for wall/chasm; announce floor when
+            # otherwise hidden (cloud occluding empty floor) or when nothing else
+            # was said. Without this, "Storm Cloud, 5 turns" gives no clue whether
+            # the cloud sits on floor (walkable) or wall (blocked).
             if tile.is_wall():
                 parts.append("Wall")
             elif tile.is_chasm:
                 parts.append("Chasm")
-            elif not parts:
-                # Empty floor — just say "Floor"
+            elif not unit and not tile.prop:
                 parts.append("Floor")
 
             return ". ".join(parts)
@@ -3710,12 +3712,15 @@ if _PyGameView is not None:
             # Skip walk/movement spells
             if _name(spell).lower() == 'walk':
                 return ("", "")
-            # Determine if this spell is truly AoE
-            try:
-                radius = spell.get_stat('radius') if hasattr(spell, 'get_stat') else getattr(spell, 'radius', 0)
-            except Exception:
-                radius = getattr(spell, 'radius', 0)
-            is_aoe = radius and radius > 0
+            # Determine if this spell is truly AoE.
+            # Check the spell's BASE radius (intrinsic to the spell), not get_stat,
+            # because global radius modifiers (e.g., Aether Wisp) stack onto every
+            # spell including non-AoE ones like Blink/Teleport. Those modifiers are
+            # cosmetic on translocation spells — the radius ring renders, but no
+            # damage/effect propagates to impacted tiles. Reporting "Within AoE
+            # 1 enemy" for Blink when the cursor sits on a unit is misleading.
+            base_radius = getattr(spell, 'radius', 0) or 0
+            is_aoe = base_radius > 0
             if not is_aoe:
                 # Check for beam/cone/burst in description
                 desc = ""
