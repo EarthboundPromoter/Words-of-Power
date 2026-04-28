@@ -2,6 +2,21 @@
 
 All notable changes to Words of Power are documented here.
 
+## [0.3.0] - 2026-04-28
+
+### New Feature: Pathfinding
+
+- **Marked target pathfinding** — Marking a target with Alt+E/N/Q/Y now announces the full compressed path on placement, then the next-step direction with target name and HP each subsequent turn. Diagonals included, matching the game's own pathfinding. Hostile units route to the cheapest walkable adjacent tile (since the target's tile is impassable to the player). Spawners get HP because they have HP. Landmarks omit the HP clause. LoS transitions surface a richer line (`Northwest to Wolf, 12 HP, blocked.`) since you're entering engagement range. Adjacent and on-tile cases stay silent — the melee threat tracker and on-mark announcement already cover those.
+- **P, path to look-mode cursor** — In look mode, P announces the full compressed path from your wizard to whatever is under the cursor: unit, prop, floor tile, anything. Walls and chasms report as impassable.
+- **Shift+P, refresh path to marked target** — Re-announce the full compressed path to your current mark, without having to unmark and remark. Useful for reorienting during a long approach.
+- **Settings: pathfind_marked = true** (default) — Toggle the per-turn navigation channel. The on-mark and Shift+P announcements still work when this is off; only the per-turn prefix is silenced.
+- **Settings: show_coordinates default flipped to true** — Players asked for grid coordinates often enough that the default was wrong. Existing installs keep whatever's written in their settings.ini. New installs get coordinates on by default.
+
+### Documentation
+
+- **README** — New "Game Keybinds" section listing the game's own controls alongside the mod's hotkey tables, so the keybind reference is one document instead of two.
+- **In-game keybind reference (Shift+/)** — Updated to mention P and Shift+P.
+
 ## [0.2.5] - 2026-04-24
 
 ### Bug Fixes

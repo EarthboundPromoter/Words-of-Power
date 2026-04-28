@@ -1,5 +1,5 @@
 # Rift Wizard 2 Screen Reader Mod — Words of Power
-MOD_VERSION = "0.2.5"
+MOD_VERSION = "0.3.0"
 
 import sys
 import os
@@ -87,8 +87,15 @@ if not os.path.exists(_settings_path):
             "\n"
             "# Show absolute grid coordinates in scan output and movement announcements.\n"
             "# Coordinates appear after direction info: \"Wolf, 3 east (12,8)\"\n"
-            "# Default: false\n"
-            "show_coordinates = false\n"
+            "# Default: true\n"
+            "show_coordinates = true\n"
+            "\n"
+            "# Announce pathfinding for the marked target. On marking, speaks the full\n"
+            "# compressed path. Each subsequent turn, prepends the next single step\n"
+            "# (\"Move north.\") to the regular mark readout. Set false to silence the\n"
+            "# navigation channel without losing the rest of the mark info.\n"
+            "# Default: true\n"
+            "pathfind_marked = true\n"
         )
     log("[Settings] Created default settings.ini")
 else:
@@ -96,10 +103,12 @@ else:
     log("[Settings] Loaded settings.ini")
 
 class _Cfg:
-    show_coordinates = _settings.getboolean('words_of_power', 'show_coordinates', fallback=False)
+    show_coordinates = _settings.getboolean('words_of_power', 'show_coordinates', fallback=True)
+    pathfind_marked = _settings.getboolean('words_of_power', 'pathfind_marked', fallback=True)
 
 cfg = _Cfg()
 log(f"[Settings] show_coordinates = {cfg.show_coordinates}")
+log(f"[Settings] pathfind_marked = {cfg.pathfind_marked}")
 
 # ============================================================================
 # TTS INTEGRATION — Tolk
@@ -756,7 +765,8 @@ from helpers import (_cardinal_direction, _bearing_index, _direction_offset, _pl
                      _ray_length, _RAYCAST_DIRS,
                      _classify_terrain, _TERRAIN_LABELS, _scan_corridor_branches,
                      _quadrant_label, _number_deploy_dupes,
-                     _merge_same_shape_groups)
+                     _merge_same_shape_groups,
+                     _compress_path, _classify_unreachable, _walkable_neighbors)
 
 # ---- Pathfinding Via Hints ----
 _VIA_HINT_CAP = 3  # Max blocked entries per scan that get pathfinding computation
@@ -4717,6 +4727,124 @@ if _PyGameView is not None:
         except Exception as e:
             log(f"[Detail] Error: {e}")
 
+    def _query_path_to_cursor(view):
+        """P key: announce the compressed path from player to whatever is under the
+        look-mode cursor. Discriminates between walkable destinations (terrain, props,
+        allies — path arrives on tile) and non-ally units (path resolves to cheapest
+        walkable adjacent neighbor, since the unit tile is impassable).
+
+        Skipped during deploy (cross-level pathing makes no sense). When the level has
+        no active cursor (e.g. normal play mode), tells the player so."""
+        try:
+            game = view.game
+            if game is None or game.p1 is None:
+                return
+            if getattr(game, 'deploying', False):
+                async_tts.speak("Pathfinding not available during deploy")
+                log("[Path] P pressed during deploy")
+                return
+            point = getattr(view, 'cur_spell_target', None)
+            if point is None:
+                async_tts.speak("No cursor target")
+                log("[Path] P pressed with no cursor")
+                return
+            level = game.cur_level
+            if level is None or not level.is_point_in_bounds(point):
+                async_tts.speak("Out of bounds")
+                log("[Path] Cursor out of bounds")
+                return
+
+            player = game.p1
+            target_xy = (point.x, point.y)
+            player_xy = (player.x, player.y)
+
+            if target_xy == player_xy:
+                async_tts.speak("Already at target.")
+                log(f"[Path] Player on target ({point.x},{point.y})")
+                return
+
+            dx = point.x - player.x
+            dy = point.y - player.y
+            if abs(dx) <= 1 and abs(dy) <= 1:
+                direction = _cardinal_direction(dx, dy)
+                text = f"Target adjacent, {direction}."
+                async_tts.speak(text)
+                log(f"[Path] {text}")
+                return
+
+            tile = level.tiles[point.x][point.y]
+            target_unit = tile.unit
+            unit_target = (target_unit is not None
+                           and not _is_player(target_unit)
+                           and Level.are_hostile(player, target_unit))
+
+            start = Level.Point(player.x, player.y)
+
+            if unit_target:
+                # Resolve to cheapest walkable adjacent neighbor of the unit tile.
+                neighbors = _walkable_neighbors(level, target_xy)
+                best_path = None
+                best_len = None
+                for nx, ny in neighbors:
+                    p = level.find_path(start, Level.Point(nx, ny), player, pythonize=True)
+                    if p and (best_len is None or len(p) < best_len):
+                        best_len = len(p)
+                        best_path = p
+                if best_path is None:
+                    async_tts.speak("No route from here, may open up.")
+                    log(f"[Path] No path to any neighbor of unit at ({point.x},{point.y})")
+                    return
+                full_seq = [start] + list(best_path)
+                text = _compress_path(full_seq, target_kind='unit')
+                async_tts.speak(text)
+                log(f"[Path] Unit at ({point.x},{point.y}): {text}")
+                return
+
+            # Walkable destination (terrain, prop, ally).
+            if not tile.can_walk:
+                async_tts.speak("Target on impassable tile.")
+                log(f"[Path] Impassable target at ({point.x},{point.y})")
+                return
+
+            path = level.find_path(start, Level.Point(point.x, point.y), player, pythonize=True)
+            if not path:
+                token = _classify_unreachable(level, target_xy)
+                msg = ("Target on impassable tile." if token == 'impassable'
+                       else "No route from here, may open up.")
+                async_tts.speak(msg)
+                log(f"[Path] Unreachable ({token}) at ({point.x},{point.y})")
+                return
+
+            full_seq = [start] + list(path)
+            text = _compress_path(full_seq, target_kind='terrain')
+            async_tts.speak(text)
+            log(f"[Path] To ({point.x},{point.y}): {text}")
+        except Exception as e:
+            log(f"[Path] Error: {e}")
+
+    def _query_path_to_marked_target(view):
+        """Shift+P: re-announce the full compressed path to the current marked
+        target. Useful for refreshing path orientation during a long approach
+        without having to unmark + remark. Speaks 'No mark' when nothing is
+        marked, with no other side effects."""
+        try:
+            target = _marked_target[0]
+            if target is None:
+                async_tts.speak("No mark")
+                log("[Path] Shift+P with no mark")
+                return
+            msg = _announce_mark_full_path(view, target)
+            if msg is None:
+                async_tts.speak("Path unavailable")
+                log("[Path] Shift+P unavailable for marked target")
+                return
+            name = _mark_target_name(target)
+            line = f"{name}. {msg}"
+            async_tts.speak(line)
+            log(f"[Path] Shift+P: {line}")
+        except Exception as e:
+            log(f"[Path] Shift+P error: {e}")
+
     def _unit_threatens_point(unit, x, y):
         """Check if a unit can threaten a given point via any spell or custom-threatening buff."""
         for spell in getattr(unit, 'spells', []):
@@ -4989,25 +5117,32 @@ if _PyGameView is not None:
             return target[0]
         return _name(target)
 
-    def _mark_scanned_target():
-        """Mark the last scanned target. Toggle off if already marked."""
+    def _mark_scanned_target(view):
+        """Mark the last scanned target. Toggle off if already marked.
+        On a fresh mark, also announces the full compressed path when
+        cfg.pathfind_marked is on."""
         target = _last_scanned_target[0]
         if target is None:
             async_tts.speak("Nothing to mark")
             log("[Mark] Nothing to mark")
             return
         current = _marked_target[0]
-        # Toggle off: same unit (identity) or same landmark (position)
         if current is not None and _same_mark(current, target):
             _marked_target[0] = None
             _mark_last_visible[0] = None
             async_tts.speak(f"Unmarked {_mark_target_name(target)}")
             log(f"[Mark] Unmarked {_mark_target_name(target)}")
+            return
+        _marked_target[0] = target
+        _mark_last_visible[0] = None  # Force first update to report LoS status
+        name = _mark_target_name(target)
+        path_msg = _announce_mark_full_path(view, target) if cfg.pathfind_marked else None
+        if path_msg:
+            async_tts.speak(f"Marked {name}. {path_msg}")
+            log(f"[Mark] Marked {name}. {path_msg}")
         else:
-            _marked_target[0] = target
-            _mark_last_visible[0] = None  # Force first update to report LoS status
-            async_tts.speak(f"Marked {_mark_target_name(target)}")
-            log(f"[Mark] Marked {_mark_target_name(target)}")
+            async_tts.speak(f"Marked {name}")
+            log(f"[Mark] Marked {name}")
 
     def _same_mark(a, b):
         """Check if two mark targets refer to the same thing."""
@@ -5082,6 +5217,181 @@ if _PyGameView is not None:
             return ", in sight" if visible else ", blocked"
         # No change — stay quiet
         return ""
+
+    # ---- Mark pathfinding ----
+    # On Alt+key: announce full compressed path. Each turn while marked, prepend
+    # next step to the regular mark readout. Gated on cfg.pathfind_marked.
+
+    def _mark_target_xy(target):
+        """(x, y) tuple from a mark target, or None if unresolvable."""
+        if isinstance(target, tuple):
+            return (target[1], target[2])
+        if hasattr(target, 'x') and hasattr(target, 'y'):
+            return (target.x, target.y)
+        return None
+
+    def _is_hostile_unit_target(player, target):
+        """True iff target is a non-player non-ally unit. Hostile units block their tile,
+        so paths to them must resolve to a walkable adjacent neighbor."""
+        if isinstance(target, tuple) or target is None:
+            return False
+        if _is_player(target):
+            return False
+        try:
+            return Level.are_hostile(player, target)
+        except Exception:
+            return False
+
+    def _compute_mark_path(level, player, target):
+        """Path from player to marked target. Returns (full_seq, target_kind):
+        - full_seq: list of Point objects starting at the player's tile and ending at
+          the destination (or its walkable adjacent for hostile units), or None if no
+          path exists. A single-point list means the player is already on the target.
+        - target_kind: 'unit' if hostile unit (tail = 'arrive adjacent'), else 'terrain'."""
+        target_xy = _mark_target_xy(target)
+        if target_xy is None:
+            return None, 'terrain'
+        is_hostile = _is_hostile_unit_target(player, target)
+        target_kind = 'unit' if is_hostile else 'terrain'
+        start = Level.Point(player.x, player.y)
+        if (player.x, player.y) == target_xy:
+            return [start], target_kind
+        if is_hostile:
+            neighbors = _walkable_neighbors(level, target_xy)
+            best_path = None
+            best_len = None
+            for nx, ny in neighbors:
+                p = level.find_path(start, Level.Point(nx, ny), player, pythonize=True)
+                if p and (best_len is None or len(p) < best_len):
+                    best_len = len(p)
+                    best_path = p
+            if best_path is None:
+                return None, target_kind
+            return [start] + list(best_path), target_kind
+        tx, ty = target_xy
+        if not (0 <= tx < level.width and 0 <= ty < level.height):
+            return None, target_kind
+        if not level.tiles[tx][ty].can_walk:
+            return None, target_kind
+        p = level.find_path(start, Level.Point(tx, ty), player, pythonize=True)
+        if not p:
+            return None, target_kind
+        return [start] + list(p), target_kind
+
+    def _mark_hp_clause(target):
+        """', {cur_hp} HP' for units (incl. spawners), empty for landmarks/props."""
+        if isinstance(target, tuple):
+            return ""
+        cur_hp = getattr(target, 'cur_hp', None)
+        if cur_hp is None:
+            return ""
+        return f", {cur_hp} HP"
+
+    def _announce_mark_full_path(view, target):
+        """Speak full compressed path to a freshly-marked target. Returns the spoken
+        string for logging, or None if pathing wasn't applicable. Call site composes
+        this with the 'Marked X' confirmation."""
+        try:
+            game = view.game
+            if game is None or game.p1 is None:
+                return None
+            level = game.cur_level
+            if level is None:
+                return None
+            player = game.p1
+            target_xy = _mark_target_xy(target)
+            if target_xy is None:
+                return None
+            if (player.x, player.y) == target_xy:
+                return "Already at target."
+            dx = target_xy[0] - player.x
+            dy = target_xy[1] - player.y
+            if abs(dx) <= 1 and abs(dy) <= 1:
+                direction = _cardinal_direction(dx, dy)
+                return f"Target adjacent, {direction}."
+            full_seq, target_kind = _compute_mark_path(level, player, target)
+            if full_seq is None:
+                # Distinguish impassable destination from no-route condition.
+                if isinstance(target, tuple):
+                    token = _classify_unreachable(level, target_xy)
+                else:
+                    # Hostile unit with no walkable neighbors, or no path to any.
+                    token = 'no_route'
+                return ("Target on impassable tile." if token == 'impassable'
+                        else "No route from here, may open up.")
+            if len(full_seq) < 2:
+                return "Already at target."
+            return _compress_path(full_seq, target_kind=target_kind)
+        except Exception as e:
+            log(f"[Mark Path] Error: {e}")
+            return None
+
+    def _speak_mark_turn_update(view):
+        """Per-turn mark readout. With pathfind_marked on, the line is
+        '{direction} to {name}, {hp} HP.' — single next-step direction (diagonal-aware,
+        matching the game's pathfinding), target name, target HP. HP omitted for
+        non-living targets (landmarks/props). LoS transitions append ', in sight' or
+        ', blocked' before the period. Adjacent / on-tile cases stay silent: the
+        on-mark announcement and the melee threat tracker already cover those.
+        Terminal messages (death/disappearance) pass through unchanged. With
+        pathfind_marked off, original full-readout behavior."""
+        target_before = _marked_target[0]
+        if target_before is None or view.game is None or view.game.p1 is None:
+            return
+        try:
+            level = view.game.cur_level
+            player = view.game.p1
+            ref = Level.Point(player.x, player.y)
+            los_before = _mark_last_visible[0]
+            update = _get_mark_update(level, ref)
+            if not update:
+                return
+            target_cleared = (_marked_target[0] is None)
+            los_changed = (_mark_last_visible[0] != los_before)
+
+            if not cfg.pathfind_marked:
+                async_tts.speak(update)
+                log(f"[Mark] Turn update: {update}")
+                return
+
+            if target_cleared:
+                async_tts.speak(update)
+                log(f"[Mark] Turn update: {update}")
+                return
+
+            # Adjacent / on-tile: silent. Melee threat tracker handles hostile
+            # adjacency; on-mark announcement covered terrain/landmark adjacency.
+            target_xy = _mark_target_xy(target_before)
+            if target_xy is None:
+                return
+            if (player.x, player.y) == target_xy:
+                return
+            dx, dy = target_xy[0] - player.x, target_xy[1] - player.y
+            if abs(dx) <= 1 and abs(dy) <= 1:
+                return
+
+            full_seq, _kind = _compute_mark_path(level, player, target_before)
+            if full_seq is None:
+                async_tts.speak("No path.")
+                log("[Mark] Turn update: No path.")
+                return
+            if len(full_seq) < 2:
+                return
+            p0, p1 = full_seq[0], full_seq[1]
+            direction = _cardinal_direction(p1.x - p0.x, p1.y - p0.y)
+            if not direction:
+                return
+
+            name = _mark_target_name(target_before)
+            body = f"{direction.capitalize()} to {name}{_mark_hp_clause(target_before)}"
+            if los_changed:
+                tag = ", in sight" if _mark_last_visible[0] else ", blocked"
+                body = f"{body}{tag}"
+            line = f"{body}."
+            async_tts.speak(line)
+            log(f"[Mark] Turn update: {line}")
+        except Exception as e:
+            log(f"[Mark] Turn update error: {e}")
 
     # Cycling state for deploy category navigation (keys 2-5)
     _deploy_cycle_cat = [None]     # Current category (2-5) or None
@@ -5328,6 +5638,7 @@ if _PyGameView is not None:
             "D, detail. Full description of whatever is under the cursor.",
             "B, spatial scan. Walkable distances in 8 directions.",
             "X, hazard scan. Clouds and webs.",
+            "P, path to cursor in look mode. Shift P, full path to marked target.",
             "V, look mode. Cursor to examine tiles.",
             "C, character sheet.",
             "Left control, cancel speech.",
@@ -5471,6 +5782,13 @@ if _PyGameView is not None:
                                             minions=_minions)
                 except Exception:
                     pass
+                # Marked target update — immediate tier fires FIRST in the post-turn
+                # sequence so the navigation step lands at the head of NVDA's speech
+                # queue. Combat-heavy turns produced enough flush content to bury the
+                # prefix under damage/cast/death events when this fired after flush.
+                if _mark_tier_immediate[0] and _marked_target[0] is not None and _turn_count[0] > 1:
+                    _speak_mark_turn_update(self)
+
                 # Flush queued speech before turn signal, then HP (#39)
                 batcher.flush()
                 _flush_hp()
@@ -5480,19 +5798,6 @@ if _PyGameView is not None:
                 _spawner_scanner.turn_reset()
                 _landmark_scanner.turn_reset()
                 _ally_scanner.turn_reset()
-
-                # Marked target update — immediate tier: before turn signal
-                if _mark_tier_immediate[0] and _marked_target[0] is not None and _turn_count[0] > 1:
-                    try:
-                        level = self.game.cur_level
-                        player = self.game.p1
-                        ref = Level.Point(player.x, player.y)
-                        update = _get_mark_update(level, ref)
-                        if update:
-                            async_tts.speak(update)
-                            log(f"[Mark] Turn update: {update}")
-                    except Exception:
-                        pass
 
                 if _turn_count[0] == 1:
                     # Auto-announce enemy/spawner count on level start
@@ -5519,16 +5824,7 @@ if _PyGameView is not None:
 
                 # Marked target update — turn-end tier: after turn signal
                 if not _mark_tier_immediate[0] and _marked_target[0] is not None and _turn_count[0] > 1:
-                    try:
-                        level = self.game.cur_level
-                        player = self.game.p1
-                        ref = Level.Point(player.x, player.y)
-                        update = _get_mark_update(level, ref)
-                        if update:
-                            async_tts.speak(update)
-                            log(f"[Mark] Turn update: {update}")
-                    except Exception:
-                        pass
+                    _speak_mark_turn_update(self)
 
         # Deploy start detection
         if deploying and not _was_deploying[0]:
@@ -5591,7 +5887,7 @@ if _PyGameView is not None:
                 elif evt.key == pygame.K_e:
                     mods = pygame.key.get_mods()
                     if mods & pygame.KMOD_ALT:
-                        _mark_scanned_target()
+                        _mark_scanned_target(self)
                     else:
                         ref, lvl, qual = _get_scan_reference(self)
                         rev = bool(mods & pygame.KMOD_SHIFT)
@@ -5599,7 +5895,7 @@ if _PyGameView is not None:
                 elif evt.key == pygame.K_n:
                     mods = pygame.key.get_mods()
                     if mods & pygame.KMOD_ALT:
-                        _mark_scanned_target()
+                        _mark_scanned_target(self)
                     else:
                         ref, lvl, qual = _get_scan_reference(self)
                         rev = bool(mods & pygame.KMOD_SHIFT)
@@ -5607,7 +5903,7 @@ if _PyGameView is not None:
                 elif evt.key == pygame.K_y:
                     mods = pygame.key.get_mods()
                     if mods & pygame.KMOD_ALT:
-                        _mark_scanned_target()
+                        _mark_scanned_target(self)
                     else:
                         ref, lvl, qual = _get_scan_reference(self)
                         rev = bool(mods & pygame.KMOD_SHIFT)
@@ -5617,7 +5913,7 @@ if _PyGameView is not None:
                 elif evt.key == pygame.K_q:
                     mods = pygame.key.get_mods()
                     if mods & pygame.KMOD_ALT:
-                        _mark_scanned_target()
+                        _mark_scanned_target(self)
                     else:
                         ref, lvl, qual = _get_scan_reference(self)
                         rev = bool(mods & pygame.KMOD_SHIFT)
@@ -5654,6 +5950,14 @@ if _PyGameView is not None:
                     log(f"[History] Forward ({pos}/{len(async_tts._history)})")
                 elif evt.key == pygame.K_d:
                     _query_detail(self)
+                elif evt.key == pygame.K_p:
+                    if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                        _query_path_to_marked_target(self)
+                    else:
+                        _query_path_to_cursor(self)
+                    # Consume so the game's K_p (pdb.set_trace dev cheat) doesn't fire.
+                    self.events = [e for e in self.events
+                                   if not (e.type == pygame.KEYDOWN and e.key == pygame.K_p)]
                 elif evt.key == pygame.K_t:
                     ref, lvl, qual = _get_scan_reference(self)
                     _query_threat(self, scan_level=lvl, ref_point=ref, qualifier=qual)

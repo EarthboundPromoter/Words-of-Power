@@ -1,6 +1,6 @@
 # Words of Power
 
-**Version 0.2.4**
+**Version 0.3.0**
 
 An accessibility mod for Rift Wizard 2 that provides full speech output through NVDA, JAWS, and other screen readers.
 
@@ -26,7 +26,7 @@ Click the link above, then download the `.zip` file listed under Assets.
 1. Your screen reader must be running before you launch the game.
 2. Extract the downloaded zip. Copy the `screen_reader` folder into `RiftWizard2/mods/` so the path looks like `RiftWizard2/mods/screen_reader/screen_reader.py`. (Create the `mods` folder if it doesn't exist.)
 3. Make sure `Tolk.dll` is in the `screen_reader` folder alongside `screen_reader.py`. If Tolk.dll is not present, the mod falls back to direct NVDA support only.
-4. Launch the game normally. You'll hear "Words of Power version 0.2.4" if it's working.
+4. Launch the game normally. You'll hear "Words of Power version 0.3.0" if it's working.
 5. Debug log writes to `screen_reader_debug.log` in the mod folder.
 
 ## How It Works
@@ -55,9 +55,56 @@ The mod tracks resources so you don't have to count. Spell charges announce at h
 
 ## Keybinds
 
-The game's own controls are unchanged. Press H in-game for its native help screen. Press Shift+/ (?) for the full mod keybind reference. Everything below is added by the mod.
+The game's own controls are unchanged. Press H in-game for its native help screen. Press Shift+/ (?) for the full mod keybind reference. The first section below is the game's native controls; everything after is added by the mod.
 
 > **Note:** On first launch, the mod rebinds tooltip cycling from PgUp/PgDn to **Backslash** (previous) and **Backspace** (next) for screen reader compatibility. PgUp/PgDn are kept as secondary bindings. Fast Forward is unbound to free Backspace. You can change any of these in Options > Key Rebind.
+
+### Game Keybinds
+
+The game's defaults, included here so you don't have to keep two reference docs open. Bindings can be customized in Options > Key Rebind.
+
+**Movement**
+
+| Key | Function |
+|-----|----------|
+| **Arrow keys** | Cardinal movement (also Numpad 8/2/4/6) |
+| **Numpad 7/9/1/3** | Diagonal movement (NW/NE/SW/SE). Without numpad, use the mod's RCtrl+Arrow combos. |
+| **Space** or **Numpad 5** | Pass turn / channel current spell |
+| **W** | Walk — move continuously toward a target tile |
+
+**Spells & Items**
+
+| Key | Function |
+|-----|----------|
+| **1–0** | Select Spell 1 through 10 |
+| **Shift+1–0** | Spell info (in some screens) |
+| **Alt+1–0** | Use item 1 through 10 |
+| **Enter** | Confirm / cast / accept (also Numpad Enter) |
+| **Escape** | Abort current action / back out of menu |
+| **Tab** | Cycle to next valid target while a spell is selected |
+| **R** | Reroll rifts (level select screen) |
+
+**Information**
+
+| Key | Function |
+|-----|----------|
+| **C** or **`** (backtick) | Open Character Sheet |
+| **S** | Open Spells screen |
+| **K** | Open Skills screen |
+| **V** | Look mode (free cursor over the map) |
+| **M** | Message log |
+| **H** or **/** | Help screen |
+| **T** | Show Threat Zone (the mod overrides this with its own threat readout) |
+| **L** | Show Line of Sight (the mod overrides this with its own LoS summary) |
+| **Backslash** | Previous tooltip (was PgUp; rebound by the mod for screen reader compatibility) |
+| **Backspace** | Next tooltip (was PgDn; rebound by the mod) |
+
+**Other**
+
+| Key | Function |
+|-----|----------|
+| **A** | Auto-pickup nearby items |
+| **I** or **.** (period) | Interact with the prop on your tile |
 
 ### Scans
 
@@ -82,7 +129,18 @@ The game's own controls are unchanged. Press H in-game for its native help scree
 | **Alt+N** | Mark/unmark the last spawner announced by N scan |
 | **Alt+Q** | Mark/unmark the last landmark announced by Q scan |
 
-Marked targets are tagged in scan output and get a direction update each turn. One mark at a time — marking a new target replaces the previous mark. Marks auto-clear when the unit dies or the landmark is collected.
+Marked targets are tagged in scan output and get a per-turn pathfinding update (see Pathfinding below). One mark at a time — marking a new target replaces the previous mark. Marks auto-clear when the unit dies or the landmark is collected. Pressing the same Alt+key on the current mark unmarks it.
+
+### Pathfinding
+
+| Key | Function |
+|-----|----------|
+| **P** | Path to look-mode cursor — full compressed path to whatever the cursor is on (unit, prop, floor, wall) |
+| **Shift+P** | Refresh path to marked target — re-announce the full compressed path without having to unmark + remark |
+
+When you mark a target, the mod announces the full path immediately (`Marked Wolf. 12 steps. Northeast 4, north 3, east 5, arrive adjacent.`). On each subsequent turn until you arrive, you get a compact next-step line (`Northwest to Wolf, 12 HP.`). Diagonals are used wherever the game's pathfinder uses them — what you hear matches what your wizard would actually walk. Hostile units route to the cheapest walkable adjacent tile (since you can't stand on top of an enemy), and the path tail says `arrive adjacent` instead of `arrive`. Unreachable destinations report `No path.` Adjacent and on-tile cases stay silent so the per-turn line doesn't compete with the melee threat tracker.
+
+Set `pathfind_marked = false` in `settings.ini` to silence the per-turn channel. The on-mark announcement and Shift+P still work — you just won't get a turn-by-turn navigation step.
 
 ### Status
 

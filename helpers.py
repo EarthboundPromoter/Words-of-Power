@@ -477,3 +477,109 @@ def _make_collective_group(bucket, key):
         'events': [],
         '_collective_text': text,
     }
+
+
+# ---- Pathfinding helpers ----
+# Pure helpers for pathfinding output formatting. The actual find_path() call
+# lives in screen_reader.py because it needs the live Level object; these are
+# the slices that can be tested in isolation.
+
+def _point_xy(p):
+    """Normalize a point-like into (x, y). Accepts (x, y) tuple or .x/.y object."""
+    if isinstance(p, tuple):
+        return p
+    return (p.x, p.y)
+
+def _compress_path(points, target_kind='terrain'):
+    """Compress a sequence of consecutive grid points into a spoken path string.
+
+    points: list where points[0] is the start and points[-1] is the destination,
+            with each successive pair representing one grid step. Accepts (x, y)
+            tuples or Point-like objects with .x/.y. Caller is responsible for
+            composing this list (typically [Point(player.x, player.y), *path]).
+    target_kind: 'terrain' (walkable destination, tail = 'arrive.') or
+                 'unit' (path resolved to adjacent tile, tail = 'arrive adjacent.').
+
+    Returns one string ready for TTS. Format conventions:
+    - 0 or 1 input points        -> 'Already at target.'
+    - 1 step single direction    -> 'Northeast, arrive.'
+    - N steps single direction   -> 'East 5, arrive.'
+    - Multi-segment              -> '12 steps. Northeast 4, north 3, east 5, arrive.'
+    - target_kind='unit' swaps tail: 'arrive adjacent.'
+
+    Adjacent-target short-circuiting and unreachable detection happen at the
+    call site before this is invoked; this helper assumes a valid path."""
+    if not points or len(points) < 2:
+        return "Already at target."
+
+    coords = [_point_xy(p) for p in points]
+    diffs = []
+    for i in range(len(coords) - 1):
+        dx = coords[i + 1][0] - coords[i][0]
+        dy = coords[i + 1][1] - coords[i][1]
+        if dx == 0 and dy == 0:
+            continue
+        sdx = (dx > 0) - (dx < 0)
+        sdy = (dy > 0) - (dy < 0)
+        diffs.append((sdx, sdy))
+
+    if not diffs:
+        return "Already at target."
+
+    dirs = [_cardinal_direction(dx, dy) for dx, dy in diffs]
+    runs = []
+    cur_dir = dirs[0]
+    cur_count = 1
+    for d in dirs[1:]:
+        if d == cur_dir:
+            cur_count += 1
+        else:
+            runs.append((cur_dir, cur_count))
+            cur_dir = d
+            cur_count = 1
+    runs.append((cur_dir, cur_count))
+
+    total = len(diffs)
+    arrive = "arrive adjacent" if target_kind == 'unit' else "arrive"
+
+    if len(runs) == 1:
+        d, n = runs[0]
+        head = d.capitalize() if n == 1 else f"{d.capitalize()} {n}"
+        return f"{head}, {arrive}."
+
+    body_parts = []
+    for i, (d, n) in enumerate(runs):
+        label = d.capitalize() if i == 0 else d
+        body_parts.append(f"{label} {n}")
+    return f"{total} steps. {', '.join(body_parts)}, {arrive}."
+
+def _classify_unreachable(level, target_xy):
+    """Decide why pathfinding failed. Returns a token, not a user-facing string,
+    so call sites format consistently and tests stay simple.
+
+    Returns:
+    - 'impassable' if target tile is itself unwalkable (wall, chasm, off-map).
+      Distinguishes 'destination cannot accept walkers' from 'no path right now.'
+    - 'no_route' otherwise (separated regions, boxed-in player, transient blockage)."""
+    tx, ty = target_xy
+    if not (0 <= tx < level.width and 0 <= ty < level.height):
+        return 'impassable'
+    if not level.tiles[tx][ty].can_walk:
+        return 'impassable'
+    return 'no_route'
+
+def _walkable_neighbors(level, target_xy):
+    """Return the 8 grid neighbors of target_xy that are walkable + in bounds.
+    Used for unit-target resolution: pathfind to one of these instead of onto
+    the (impassable) unit tile itself. List order is N, NE, E, SE, S, SW, W, NW
+    so callers see deterministic ordering. Caller picks among them by pathing
+    cost or another policy."""
+    tx, ty = target_xy
+    neighbors = []
+    for dx, dy in [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)]:
+        nx, ny = tx + dx, ty + dy
+        if not (0 <= nx < level.width and 0 <= ny < level.height):
+            continue
+        if level.tiles[nx][ny].can_walk:
+            neighbors.append((nx, ny))
+    return neighbors
