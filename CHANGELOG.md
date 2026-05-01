@@ -2,6 +2,16 @@
 
 All notable changes to Words of Power are documented here.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **Generic shop landmarks now announced for amorphously-named instances** — Chests, boxes, scrolls (Scroll of Spells), the Arcane Library, and other Shop subclasses whose property name doesn't contain "shop" or "shrine" were silently dropped from landmark scans. Now caught by the generic Shop fallback and voiced.
+
+### Under the Hood
+
+- **Data-model groundwork** — Internal infrastructure laying the foundation for upcoming structured-output features. No player-visible behavior change.
+
 ## [0.3.0] - 2026-04-28
 
 ### New Feature: Pathfinding
