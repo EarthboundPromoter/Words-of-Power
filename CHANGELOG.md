@@ -2,7 +2,7 @@
 
 All notable changes to Words of Power are documented here.
 
-## [Unreleased]
+## [0.4.0] - 2026-05-01
 
 ### Bug Fixes
 
@@ -10,7 +10,7 @@ All notable changes to Words of Power are documented here.
 
 ### Under the Hood
 
-- **Data-model groundwork** — Internal infrastructure laying the foundation for upcoming structured-output features. No player-visible behavior change.
+- **Data-model groundwork** — Internal infrastructure laying the foundation for upcoming structured-output features. No player-visible behavior change. The 0.4.x line will iterate on speech batching and output improvements built atop this foundation.
 
 ## [0.3.0] - 2026-04-28
 

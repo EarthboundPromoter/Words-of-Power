@@ -1,5 +1,5 @@
 # Rift Wizard 2 Screen Reader Mod — Words of Power
-MOD_VERSION = "0.3.0"
+MOD_VERSION = "0.4.0"
 
 import sys
 import os
@@ -96,6 +96,12 @@ if not os.path.exists(_settings_path):
             "# navigation channel without losing the rest of the mark info.\n"
             "# Default: true\n"
             "pathfind_marked = true\n"
+            "\n"
+            "# Dev-only: write a per-event JSONL trace of internal capture-stage records\n"
+            "# to journal_debug.log. Used by the mod author for debugging the data-model\n"
+            "# pipeline. No effect on speech behavior. Leave false unless instructed.\n"
+            "# Default: false\n"
+            "journal_log_enabled = false\n"
         )
     log("[Settings] Created default settings.ini")
 else:
