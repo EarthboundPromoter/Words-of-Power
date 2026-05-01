@@ -105,10 +105,12 @@ else:
 class _Cfg:
     show_coordinates = _settings.getboolean('words_of_power', 'show_coordinates', fallback=True)
     pathfind_marked = _settings.getboolean('words_of_power', 'pathfind_marked', fallback=True)
+    journal_log_enabled = _settings.getboolean('words_of_power', 'journal_log_enabled', fallback=False)
 
 cfg = _Cfg()
 log(f"[Settings] show_coordinates = {cfg.show_coordinates}")
 log(f"[Settings] pathfind_marked = {cfg.pathfind_marked}")
+log(f"[Settings] journal_log_enabled = {cfg.journal_log_enabled}")
 
 # ============================================================================
 # TTS INTEGRATION — Tolk
@@ -262,6 +264,16 @@ import Level
 
 _original_setup_logging = Level.Level.setup_logging
 log("Level lifecycle hook base captured")
+
+# ----- Phase 2: Journal capture stage (silent infrastructure, no consumers yet) -----
+import journal as _journal
+_journal.install_hooks()
+if cfg.journal_log_enabled:
+    _journal_log_path = os.path.join(mod_dir, "journal_debug.log")
+    _journal.journal.open_log(_journal_log_path)
+    log(f"[Journal] Capture hooks installed; debug log -> {_journal_log_path}")
+else:
+    log("[Journal] Capture hooks installed; debug log disabled (journal_log_enabled=false)")
 
 # ============================================================================
 # PHASE 1-2: Event Hooks - All Combat & Game Events
@@ -1987,6 +1999,7 @@ def patched_setup_logging_v2(self, logdir, level_num):
     pos = f" @({player.x},{player.y})" if player else ""
     log(f"[Screen Reader] Level {level_num} loaded{pos} - EventManager {id(self.event_manager)}")
     register_triggers(self.event_manager)
+    _journal.journal.reset(level_num)
     # Reset per-level state for new floor
     _charge_announced.clear()
     _cancel_hp_announcement()
@@ -4351,11 +4364,11 @@ if _PyGameView is not None:
             return ('landmark', 0, "Duplication Shrine")
         if cls == 'AmnesiaShop':
             return ('landmark', 0, "Amnesia Shrine")
-        if cls == 'Shop' or (hasattr(prop, 'shop_type') or hasattr(prop, 'items')):
-            # Generic shop fallback
-            pname = _name(prop, "")
-            if pname and 'shop' in pname.lower() or 'shrine' in pname.lower():
-                return ('landmark', 0, pname)
+        if cls == 'Shop' or hasattr(prop, 'shop_type') or hasattr(prop, 'items'):
+            # Generic shop fallback. Includes amorphously-named Shop instances
+            # whose .name doesn't contain "shop"/"shrine" — chests, boxes,
+            # scrolls (e.g. Scroll of Spells), Arcane Library, etc.
+            return ('landmark', 0, _name(prop, "Shop"))
         # Pickups — Tier 0: unique finds (build-defining, don't miss these)
         if cls == 'SpellScroll':
             spell = getattr(prop, 'spell', None)
