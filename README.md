@@ -1,6 +1,6 @@
 # Words of Power
 
-**Version 0.3.0**
+**Version 0.4.0**
 
 An accessibility mod for Rift Wizard 2 that provides full speech output through NVDA, JAWS, and other screen readers.
 
