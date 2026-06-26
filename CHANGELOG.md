@@ -2,6 +2,12 @@
 
 All notable changes to Words of Power are documented here.
 
+## [0.4.1] - 2026-06-26
+
+### Installation
+
+- **One-click mod enabler for blind players (`enable_screen_reader.exe`)** — Rift Wizard 2's Steam Workshop update changed how mods load. Mods are now opt-in: the game loads a mod only if it has been enabled through the in-game Mods menu, which is a visual list a blind player cannot read until the screen reader is already running. That is a catch-22 — the very mod that would voice the menu can't be switched on without it. This release ships a small standalone tool that resolves it by enabling the mod directly, writing `screen_reader` into the game's saved options (`options2.dat`) without going through the menu. Close the game, run `enable_screen_reader.exe`, relaunch, and the screen reader speaks on startup. Run it with `--disable` to turn the mod back off. It is a self-contained executable — no Python installation required — built from the included `enable_screen_reader.py` source. The mod's runtime code is unchanged from 0.4.0; this release is packaging and installation tooling only.
+
 ## [0.4.0] - 2026-05-01
 
 ### Bug Fixes

@@ -26,8 +26,9 @@ Click the link above, then download the `.zip` file listed under Assets.
 1. Your screen reader must be running before you launch the game.
 2. Extract the downloaded zip. Copy the `screen_reader` folder into `RiftWizard2/mods/` so the path looks like `RiftWizard2/mods/screen_reader/screen_reader.py`. (Create the `mods` folder if it doesn't exist.)
 3. Make sure `Tolk.dll` is in the `screen_reader` folder alongside `screen_reader.py`. If Tolk.dll is not present, the mod falls back to direct NVDA support only.
-4. Launch the game normally. You'll hear "Words of Power version 0.3.0" if it's working.
-5. Debug log writes to `screen_reader_debug.log` in the mod folder.
+4. Enable the mod. Since Rift Wizard 2's Steam Workshop update, mods are off by default and are turned on through the in-game Mods menu — a visual list that isn't usable without sight. With the game **closed**, run `enable_screen_reader.exe` from the `screen_reader` folder (double-click it, or run it from a command prompt). It switches the mod on for you, no menu needed, and reports what it did. To turn the mod off again later, run it from a command prompt with `--disable`.
+5. Launch the game normally. You'll hear "Words of Power version 0.4.0" if it's working.
+6. Debug log writes to `screen_reader_debug.log` in the mod folder.
 
 ## How It Works
 
