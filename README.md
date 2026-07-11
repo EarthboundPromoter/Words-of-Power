@@ -1,5 +1,14 @@
 # Words of Power
 
+> **This mod is on temporary hold.** Its code survives, intact and improved, in
+> [Words of Power: RW3](https://github.com/EarthboundPromoter/Words-of-Power-II)
+> for Rift Wizard 3. If you're an RW2 player and you want the best experience,
+> it's recommended you check out the new game. It's great. If you'd rather stay
+> put, you can trust that all the improvements — and there are a whole lot of
+> them — will make their way back here eventually, because Words of Power: RW3
+> is the mod I dreamed of when I started its predecessor. Thank you, and blast
+> on, wizards.
+
 **Version 0.4.0**
 
 An accessibility mod for Rift Wizard 2 that provides full speech output through NVDA, JAWS, and other screen readers.
