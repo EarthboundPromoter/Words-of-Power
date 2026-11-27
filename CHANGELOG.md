@@ -2,6 +2,13 @@
 
 All notable changes to Words of Power are documented here.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **Main menu: Mods entry announced as "Quit"** — The game inserted a MODS entry before QUIT, but the title menu labels were keyed by hardcoded indices. Focusing Mods said "Quit" and focusing the real Quit said "Option 7", so the Mods menu looked missing. Labels are now keyed by the game's own `TITLE_SELECTION_*` constants.
+- **Mods menu voiced (was "Unknown State 15")** — The in-game Mods menu (enable/disable mods, load order, Workshop actions) had no voicing: entering it said "Unknown State 15" and navigation was silent. It now announces focus with column and position (`traduccion_es, disabled, 2 of 3`), enable/disable toggles, Shift+Up/Down load-order moves, the upload picker, the action buttons with their descriptions, and the status line. Keybind help is spoken on entry. Ported from Words of Power: RW3, whose game shares this menu code. Inert on game builds without the Mods menu.
+
 ## [0.4.1] - 2026-06-26
 
 ### Installation
