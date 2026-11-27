@@ -6244,6 +6244,9 @@ if _PyGameView is not None:
     _STATE_SETUP_CUSTOM = getattr(_main, 'STATE_SETUP_CUSTOM', 12)
     _STATE_PICK_MUTATOR_PARAMS = getattr(_main, 'STATE_PICK_MUTATOR_PARAMS', 13)
     _STATE_ENTER_MUTATOR_VALUE = getattr(_main, 'STATE_ENTER_MUTATOR_VALUE', 14)
+    # Mod enable/disable menu (added to the game after 0.4.0 shipped). None on
+    # game builds without it, so every check below stays inert there.
+    _STATE_MODS = getattr(_main, 'STATE_MODS', None)
 
     # Human-readable state names for announcement
     _STATE_NAMES = {
@@ -6263,6 +6266,8 @@ if _PyGameView is not None:
         _STATE_PICK_MUTATOR_PARAMS: "Mutator Parameters",
         _STATE_ENTER_MUTATOR_VALUE: "Enter Mutator Value",
     }
+    if _STATE_MODS is not None:
+        _STATE_NAMES[_STATE_MODS] = "Mods"
 
     # States that are NOT YET VOICED — announce "coming soon" on entry
     # These have no input processor patch, so this is the only speech they get.
@@ -6286,6 +6291,8 @@ if _PyGameView is not None:
         _STATE_PICK_MUTATOR_PARAMS,
         _STATE_ENTER_MUTATOR_VALUE,
     }
+    if _STATE_MODS is not None and hasattr(_PyGameView, 'process_mods_input'):
+        _SELF_ANNOUNCING_STATES.add(_STATE_MODS)  # mods menu voicing announces
 
     # KEY_BIND constants for keybind resolution
     _KB_UP = getattr(_main, 'KEY_BIND_UP', 0)
@@ -6360,6 +6367,11 @@ if _PyGameView is not None:
 
         if state == _STATE_COMBAT_LOG:
             return f"{nav_ud} to scroll. {nav_lr} to change turn. {abort} to close"
+
+        if _STATE_MODS is not None and state == _STATE_MODS:
+            return (f"{nav_ud} to move within a column. {nav_lr} to switch between "
+                    f"disabled mods, enabled mods, and actions. {confirm} to enable or disable. "
+                    f"Shift with {up} or {down} to change load order. {abort} to go back")
 
         if state == _STATE_CHAR_SHEET:
             return f"{nav_ud}. {nav_lr} to switch sections. {confirm} to select. {abort} to close"
@@ -6471,15 +6483,20 @@ if _PyGameView is not None:
     # ---- STATE_TITLE (main menu) ----
     _orig_process_title = _PyGameView.process_title_input
     _sr_title_entered = [False]
+    # Keyed by the game's TITLE_SELECTION_* constants rather than raw indices:
+    # the game inserted MODS before QUIT, and hardcoded numbers announced the
+    # Mods entry as "Quit" and the real Quit as "Option 7".
     _sr_title_labels = {
-        0: "Continue Run",
-        1: "Abandon Run",
-        2: "New Game",
-        3: "Options",
-        4: "Bestiary",
-        5: "Discord",
-        6: "Quit",
+        getattr(_main, 'TITLE_SELECTION_LOAD', 0): "Continue Run",
+        getattr(_main, 'TITLE_SELECTION_ABANDON', 1): "Abandon Run",
+        getattr(_main, 'TITLE_SELECTION_NEW', 2): "New Game",
+        getattr(_main, 'TITLE_SELECTION_OPTIONS', 3): "Options",
+        getattr(_main, 'TITLE_SELECTION_BESTIARY', 4): "Bestiary",
+        getattr(_main, 'TITLE_SELECTION_DISCORD', 5): "Discord",
     }
+    if hasattr(_main, 'TITLE_SELECTION_MODS'):
+        _sr_title_labels[_main.TITLE_SELECTION_MODS] = "Mods"
+    _sr_title_labels[getattr(_main, 'TITLE_SELECTION_EXIT', 6)] = "Quit"
 
     def _patched_process_title(self):
         if not _sr_title_entered[0]:
@@ -6945,7 +6962,126 @@ if _PyGameView is not None:
     _PyGameView.process_enter_mutator_value_input = _patched_process_enter_value
     log("  Mutator value entry voicing installed")
 
-    log("  State screen voicing: 12 states with full navigation + centralized transition detector for all 15")
+    # ---- STATE_MODS (mod enable/disable menu) ----
+    # Three focus groups (disabled mods, enabled mods, actions) plus an upload
+    # sub-list, a dirty-state abort redirect (Escape with unapplied changes
+    # jumps focus to Restart) and a status line. Focus speech follows
+    # examine_target like every other menu. Ported from Words of Power: RW3,
+    # whose game shares this menu code.
+    if _STATE_MODS is not None and hasattr(_PyGameView, 'process_mods_input'):
+        _orig_process_mods = _PyGameView.process_mods_input
+        _sr_mods_entered = [False]
+        _MOD_MENU_BROWSE = getattr(_main, 'MOD_MENU_BROWSE', 0)
+        _MOD_MENU_UPLOAD = getattr(_main, 'MOD_MENU_UPLOAD', 1)
+        _MOD_MENU_BACK = getattr(_main, 'MOD_MENU_BACK', 2)
+        _MOD_MENU_RESET = getattr(_main, 'MOD_MENU_RESET', 3)
+        _MOD_MENU_RESTART = getattr(_main, 'MOD_MENU_RESTART', 4)
+        _MOD_MENU_UPLOAD_CANCEL = getattr(_main, 'MOD_MENU_UPLOAD_CANCEL', 5)
+        # Spoken forms of the game's drawn action texts and detail-panel lines
+        # (draw_mods_menu) - same words, case relaxed.
+        _MOD_ACTION_LABELS = {
+            _MOD_MENU_BROWSE: "Browse Workshop",
+            _MOD_MENU_UPLOAD: "Upload Mod",
+            _MOD_MENU_BACK: "Back",
+            _MOD_MENU_RESET: "Reset",
+            _MOD_MENU_RESTART: "Restart",
+            _MOD_MENU_UPLOAD_CANCEL: "Back",
+        }
+        _MOD_ACTION_DETAILS = {
+            _MOD_MENU_BROWSE: "Open the Steam Workshop page.",
+            _MOD_MENU_UPLOAD: "Upload a local mod to Workshop.",
+            _MOD_MENU_BACK: "Return to the title screen.",
+            _MOD_MENU_RESET: "Reset mods to the current run's starting layout.",
+            _MOD_MENU_RESTART: "Restart the game to apply the current mod layout.",
+        }
+
+        def _mods_focus_label(view, target):
+            if target is None:
+                return ""
+            if getattr(view, 'mods_menu_upload_selecting', False):
+                if target == _MOD_MENU_UPLOAD_CANCEL:
+                    return "Back"
+                return str(target)
+            if isinstance(target, str):
+                enabled = view.options.get('enabled_mods', [])
+                disabled = getattr(view, 'mods_menu_disabled_names', [])
+                if target in enabled:
+                    return (f"{target}, enabled, "
+                            f"{enabled.index(target) + 1} of {len(enabled)}")
+                if target in disabled:
+                    return (f"{target}, disabled, "
+                            f"{disabled.index(target) + 1} of {len(disabled)}")
+                return target
+            label = _MOD_ACTION_LABELS.get(target)
+            if label:
+                detail = _MOD_ACTION_DETAILS.get(target, "")
+                return f"{label}. {detail}" if detail else label
+            return ""
+
+        def _patched_process_mods(self):
+            import pygame
+            if not _sr_mods_entered[0]:
+                _sr_mods_entered[0] = True
+                label = _mods_focus_label(self, self.examine_target)
+                async_tts.speak(f"Mods. {label}" if label else "Mods")
+                log("[State] MODS entered")
+
+            prev_sel = self.examine_target
+            prev_upload = bool(getattr(self, 'mods_menu_upload_selecting', False))
+            prev_enabled = list(self.options.get('enabled_mods', []))
+            prev_status = getattr(self, 'mods_menu_status', "") or ""
+            # Browse opens the system web browser - detect the confirm BEFORE
+            # delegating, since the action leaves no state behind to diff.
+            browse_hit = (
+                not prev_upload and prev_sel == _MOD_MENU_BROWSE
+                and any(e.type == pygame.KEYDOWN
+                        and e.key in self.key_binds[_KB_CONFIRM]
+                        for e in self.events))
+            _orig_process_mods(self)
+
+            if self.state != _STATE_MODS:
+                _sr_mods_entered[0] = False
+                return
+
+            parts = []
+            cur_upload = bool(getattr(self, 'mods_menu_upload_selecting', False))
+            cur_status = getattr(self, 'mods_menu_status', "") or ""
+            if browse_hit and not cur_status:
+                parts.append("Opened the Steam Workshop page in the web browser.")
+            if cur_upload != prev_upload:
+                parts.append("Select mod to upload." if cur_upload else "Mods.")
+                parts.append(_mods_focus_label(self, self.examine_target))
+            else:
+                tgt = self.examine_target
+                cur_enabled = self.options.get('enabled_mods', [])
+                if isinstance(tgt, str) and tgt == prev_sel:
+                    was_in = tgt in prev_enabled
+                    now_in = tgt in cur_enabled
+                    if was_in != now_in:
+                        # Confirm toggled the mod between columns.
+                        parts.append(f"{tgt} {'enabled' if now_in else 'disabled'}.")
+                    elif (was_in and now_in
+                            and prev_enabled.index(tgt) != cur_enabled.index(tgt)):
+                        # Shift+Up/Down load-order reorder.
+                        parts.append(f"{tgt}, position "
+                                     f"{cur_enabled.index(tgt) + 1} of {len(cur_enabled)}.")
+                elif tgt != prev_sel and tgt is not None:
+                    # Covers arrow navigation AND the dirty-state abort redirect
+                    # (focus teleports to Restart; the Restart label + detail
+                    # line explains why Escape didn't exit).
+                    parts.append(_mods_focus_label(self, tgt))
+            if cur_status != prev_status and cur_status:
+                parts.append(' '.join(cur_status.split()))
+            msg = ' '.join(p for p in parts if p)
+            if msg:
+                async_tts.speak(msg)
+                log(f"[State] MODS: {msg}")
+
+        _PyGameView.process_mods_input = _patched_process_mods
+        log("  Mods menu voicing installed")
+
+    log(f"  State screen voicing: {len(_SELF_ANNOUNCING_STATES) - 2} states with full navigation "
+        f"+ centralized transition detector for all {len(_STATE_NAMES)}")
 
 else:
     log("[WARNING] Could not find PyGameView class - UI hooks not installed")
